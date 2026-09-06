@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>디딤돌 sLLM 성능 평가</title>
+<style>
+  :root{
+    --bg:#f8fafc; --card:#fff; --line:#e2e8f0; --ink:#0f172a; --dim:#64748b;
+    --green:#22c55e; --green-d:#16a34a; --track:#e5e7eb; --accent:#2563eb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",
+            "Noto Sans KR",Roboto,sans-serif;}
+  main{max-width:920px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--dim);margin:0 0 18px}
+  .badges{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+  .badge{font-size:12px;padding:3px 9px;border-radius:999px;background:#eef2f7;color:#334155;
+         border:1px solid var(--line);white-space:nowrap}
+  .badge.gpu{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+  .badge.cpu{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+  .controls{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  button{font:inherit;font-weight:600;padding:9px 18px;border-radius:8px;border:1px solid transparent;
+         background:var(--accent);color:#fff;cursor:pointer}
+  button.ghost{background:#fff;color:var(--ink);border-color:var(--line);font-weight:500}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  #phase{color:var(--dim);font-size:13px}
+
+  /* 평균 패널 — 기본 숨김, 100/100 완료 시에만 노출 */
+  #avg{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--green);
+       border-radius:10px;padding:16px 18px;margin-bottom:18px}
+  #avg h2{font-size:14px;margin:0 0 12px;color:var(--dim);font-weight:600;letter-spacing:.02em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px}
+  .stat .k{font-size:12px;color:var(--dim)}
+  .stat .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .stat .u{font-size:12px;font-weight:500;color:var(--dim);margin-left:2px}
+
+  /* 다운로드 진행바 */
+  #prep{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:14px 18px;margin-bottom:18px}
+  .dl+.dl{margin-top:12px}
+  .dl .row{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:5px}
+  .dl .row b{color:var(--ink);font-weight:600}
+  .bar{height:10px;background:var(--track);border-radius:999px;overflow:hidden}
+  .fill{height:100%;width:0%;border-radius:999px;
+        background:linear-gradient(90deg,var(--green),var(--green-d));
+        transition:width .15s linear}
+
+  #runbar{margin-bottom:14px}
+  #rows{display:flex;flex-direction:column;gap:8px}
+  .r{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .r.err{border-color:#fecaca}
+  .r>summary{list-style:none;cursor:pointer;padding:11px 14px;display:flex;flex-wrap:wrap;
+             align-items:center;gap:10px;font-variant-numeric:tabular-nums}
+  .r>summary::-webkit-details-marker{display:none}
+  .r .idx{font-weight:700;min-width:38px;color:var(--dim)}
+  .r .turn{font-size:11px;padding:1px 7px;border-radius:999px;background:#eef2f7;color:#475569}
+  .r .m{font-size:13px;color:#334155}
+  .r .m b{font-weight:700;color:var(--ink)}
+  .r .f1{margin-left:auto;font-weight:700}
+  .r .warn{font-size:11px;color:#b45309}
+  .body{border-top:1px solid var(--line);padding:12px 14px;display:grid;gap:12px}
+  .body h4{margin:0 0 4px;font-size:12px;color:var(--dim);font-weight:600}
+  .body p{margin:0;white-space:pre-wrap;word-break:break-word}
+  .body .pred{color:#0f172a}
+  .body .ref{color:#475569}
+
+  #blocker{position:fixed;inset:0;background:#0f172af2;color:#fff;display:grid;place-items:center;
+           padding:32px;z-index:9}
+  #blocker div{max-width:460px;text-align:center}
+  #blocker h2{margin:0 0 10px;font-size:18px}
+  #blocker p{margin:0 0 8px;color:#cbd5e1;font-size:14px}
+</style>
+</head>
+<body>
+<div id="blocker" hidden>
+  <div>
+    <h2>이 기기에서는 실행할 수 없습니다</h2>
+    <p>이 평가는 1.02&nbsp;GB 규모의 fp32 모델을 브라우저에서 직접 구동합니다.
+       iOS·iPadOS에서는 WebGPU가 필요하며, WebGPU는 <b>Safari 26 이상</b>에서 지원됩니다.</p>
+    <p id="blockWhy"></p>
+    <p>Safari 26 이상으로 업데이트하거나, 데스크톱 브라우저에서 열어 주세요.</p>
+  </div>
+</div>
+
+<main>
+  <h1>디딤돌 sLLM 성능 평가</h1>
+  <p class="sub">데이터셋 100행 · 각 행의 마지막 user 질문에 대한 마지막 assistant 응답을 대상으로 측정합니다.</p>
+
+  <div class="badges" id="badges"></div>
+
+  <div class="controls">
+    <button id="start" disabled>성능 평가 시작</button>
+    <button id="stop" class="ghost" disabled>중단</button>
+    <span id="phase">준비 중…</span>
+  </div>
+
+  <section id="avg" hidden>
+    <h2>평균 (100행 완료)</h2>
+    <div class="grid">
+      <div class="stat"><div class="k">TTFT 평균</div><div class="v" id="aTtft">–</div></div>
+      <div class="stat"><div class="k">총 완료 시간 평균</div><div class="v" id="aTotal">–</div></div>
+      <div class="stat"><div class="k">생성 속도 평균</div><div class="v" id="aTps">–</div></div>
+      <div class="stat"><div class="k">ROUGE-1 F1</div><div class="v" id="aF1">–</div></div>
+      <div class="stat"><div class="k">ROUGE-1 Precision</div><div class="v" id="aP">–</div></div>
+      <div class="stat"><div class="k">ROUGE-1 Recall</div><div class="v" id="aR">–</div></div>
+      <div class="stat"><div class="k">정상 종료</div><div class="v" id="aEos">–</div></div>
+      <div class="stat"><div class="k">총 소요</div><div class="v" id="aWall">–</div></div>
+    </div>
+  </section>
+
+  <section id="prep" hidden>
+    <div class="dl" id="dlModel">
+      <div class="row"><b>model.onnx</b><span class="s">대기 중</span></div>
+      <div class="bar"><div class="fill"></div></div>
+    </div>
+    <div class="dl" id="dlTok">
+      <div class="row"><b>tokenizer.json</b><span class="s">대기 중</span></div>
+      <div class="bar"><div class="fill"></div></div>
+    </div>
+  </section>
+
+  <div id="runbar" hidden>
+    <div class="dl">
+      <div class="row"><b>평가 진행</b><span class="s"></span></div>
+      <div class="bar"><div class="fill"></div></div>
+    </div>
+  </div>
+
+  <div id="rows"></div>
+</main>
+
+<script type="module" src="./web/app.js"></script>
+</body>
+</html>

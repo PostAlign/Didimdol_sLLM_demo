@@ -1,0 +1,16 @@
+Didimdol_sLLM
+Copyright (c) 2026 PostAlign
+
+This model is a Model Derivative of Gemma 3 270M IT (google/gemma-3-270m-it),
+created by fine-tuning the Gemma 3 270M IT weights. The weights distributed in
+this repository have been modified from the original Gemma 3 270M IT weights.
+
+Gemma is provided under and subject to the Gemma Terms of Use found at
+ai.google.dev/gemma/terms
+
+A copy of the Gemma Terms of Use is included in this repository as
+gemma_terms.md. Use of this model is additionally subject to the Gemma
+Prohibited Use Policy (ai.google.dev/gemma/prohibited_use_policy).
+
+In addition to the Gemma Terms of Use, this model is made available by
+PostAlign for NON-COMMERCIAL USE ONLY. See LICENSE for the full terms.

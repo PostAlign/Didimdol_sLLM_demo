@@ -1,0 +1,72 @@
+# main 에 push 되면 GitHub 에 올라간 파일 기준으로 정적 사이트를 GitHub Pages 에 배포한다.
+#
+# 배포 대상 (저장소에 커밋된 것만):
+#   index.html, data.jsonl, web/, tokenizer/, model/
+#
+# model.onnx (1.02 GB) 는 .gitignore 로 제외되어 있고 GitHub 에 올라가지 않는다.
+# web/worker.js 가 Hugging Face 에서 직접 받아오므로 여기서는 다루지 않는다.
+#
+# 저장소 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로
+# 한 번 설정해 두어야 한다.
+
+name: Deploy static site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 한 번에 하나만. 진행 중인 배포는 취소하지 않고 대기열의 이전 실행만 건너뛴다.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site
+
+          for p in index.html data.jsonl web tokenizer model; do
+            if [ ! -e "$p" ]; then
+              echo "::error::필수 경로가 없습니다: $p"
+              exit 1
+            fi
+            cp -r "$p" _site/
+          done
+
+          # Jekyll 처리를 건너뛴다 (밑줄로 시작하는 경로 무시 등 방지).
+          touch _site/.nojekyll
+
+          echo "배포 파일 목록:"
+          find _site -type f | sort
+          echo
+          du -sh _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,146 @@
+Didimdol_sLLM License
+Copyright (c) 2026 PostAlign
+
+이 모델("본 모델")은 Google 의 Gemma 3 270M IT(google/gemma-3-270m-it)를 파인튜닝하여
+만든 Model Derivative 입니다. 따라서 본 모델에는 (1) Google 의 Gemma Terms of Use 와
+(2) 아래 PostAlign 의 추가 조건이 함께 적용됩니다. 본 모델을 내려받거나 사용하면
+두 조건 모두에 동의한 것으로 봅니다.
+
+This model ("the Model") is a Model Derivative of Google's Gemma 3 270M IT
+(google/gemma-3-270m-it). It is therefore governed by (1) Google's Gemma Terms of
+Use and (2) the additional PostAlign terms below. By downloading or using the
+Model you agree to both.
+
+
+────────────────────────────────────────────────────────────────────────
+1. 적용 범위 / Scope
+────────────────────────────────────────────────────────────────────────
+
+"본 모델"은 이 레포지토리에 포함된 가중치(model.onnx), 설정 파일(config.json,
+generation_config.json), 토크나이저 파일, 그리고 이들로부터 파생된 모든
+Model Derivative(양자화, 추가 파인튜닝, 변환, 증류 결과물 포함)를 뜻합니다.
+
+"the Model" means the weights (model.onnx), configuration files, tokenizer
+files contained in this repository, and any Model Derivative thereof
+(including quantized, further fine-tuned, converted, or distilled versions).
+
+
+────────────────────────────────────────────────────────────────────────
+2. Gemma Terms of Use (필수 / mandatory)
+────────────────────────────────────────────────────────────────────────
+
+2.1 본 모델의 사용, 복제, 수정, 배포에는 Google 의 Gemma Terms of Use
+    (https://ai.google.dev/gemma/terms) 가 그대로 적용됩니다. 전문 사본은
+    이 레포지토리의 gemma_terms.md 에 포함되어 있습니다.
+
+2.2 Gemma Terms of Use Section 3.2 의 사용 제한이 본 조건의 강제 조항으로
+    편입됩니다. 즉 본 모델을 다음 용도로 사용해서는 안 됩니다.
+      (a) Gemma Prohibited Use Policy
+          (https://ai.google.dev/gemma/prohibited_use_policy) 가 금지하는 용도
+      (b) 관련 법령을 위반하는 용도
+    본 모델을 제3자에게 배포하는 경우, 배포받는 사람에게도 본 모델이
+    Gemma Terms of Use Section 3.2 의 사용 제한을 받는다는 사실을 고지해야 합니다.
+
+2.3 본 모델을 재배포할 때에는 이 LICENSE, NOTICE, gemma_terms.md 파일을
+    함께 배포해야 하며, 파일을 수정한 경우 수정 사실을 명시해야 합니다.
+
+2.4 Google 은 본 모델의 출력물(Output)에 대해 어떠한 권리도 주장하지 않으며,
+    본 모델은 Google 이 보증하거나 후원하는 것이 아닙니다. Gemma, Google 의
+    상표·로고에 대한 어떠한 권리도 본 조건으로 부여되지 않습니다.
+
+2.1 The use, reproduction, modification and distribution of the Model remain
+    subject to Google's Gemma Terms of Use; a verbatim copy is included as
+    gemma_terms.md. 2.2 The use restrictions of Gemma Terms of Use Section 3.2
+    (the Gemma Prohibited Use Policy, and applicable law) are incorporated here
+    as an enforceable provision, and you must notify any downstream recipient
+    that the Model is subject to those restrictions. 2.3 Redistribution must
+    include this LICENSE, NOTICE and gemma_terms.md, and modified files must
+    carry prominent notices stating that they were modified. 2.4 Google claims
+    no rights in Outputs; nothing here grants rights in Google's trademarks.
+
+
+────────────────────────────────────────────────────────────────────────
+3. PostAlign 추가 조건 — 비상업적 이용에 한함
+   PostAlign additional terms — NON-COMMERCIAL USE ONLY
+────────────────────────────────────────────────────────────────────────
+
+이 조항은 Gemma Terms of Use Section 3.1 이 허용하는 "additional or different
+terms and conditions" 로서, Gemma Terms of Use 보다 좁은 범위의 권리를 부여할 뿐
+Gemma Terms of Use 와 충돌하지 않습니다. (This Section 3 is an additional term
+permitted by Gemma Terms of Use Section 3.1; it only narrows the rights granted
+by PostAlign and does not conflict with the Gemma Terms of Use.)
+
+3.1 이용 허락 / Grant
+    제2조와 본 조를 준수하는 것을 조건으로, PostAlign 은 귀하에게 전 세계에서
+    무상·비독점·양도불가·재실시권 없는 권리로 본 모델을 **비상업적 목적에
+    한하여** 사용·복제·수정·배포할 수 있는 권리를 부여합니다.
+    Subject to Sections 2 and 3, PostAlign grants you a worldwide,
+    royalty-free, non-exclusive, non-transferable, non-sublicensable license to
+    use, reproduce, modify and distribute the Model FOR NON-COMMERCIAL PURPOSES
+    ONLY.
+
+3.2 "비상업적 목적" / "Non-commercial purpose"
+    개인적 이용, 학술 연구, 교육, 평가·벤치마킹, 비영리 목적의 공개 등
+    금전적 보상이나 상업적 이익을 주된 목적으로 하지 않는 이용을 말합니다.
+    Personal use, academic research, education, evaluation/benchmarking, and
+    non-profit publication — i.e. use not primarily intended for or directed
+    toward commercial advantage or monetary compensation.
+
+3.3 "상업적 이용" / "Commercial use" (별도 서면 허락 필요)
+    다음을 포함하되 이에 한정되지 않습니다.
+      (a) 유료 제품·서비스·기능에 본 모델을 탑재하거나 이용하는 행위
+      (b) 본 모델 또는 그 출력물을 유상으로 제공·판매·재판매하는 행위
+      (c) 사내 업무·영업 활동 등 영리 목적 활동에 본 모델을 이용하는 행위
+      (d) 광고 수익 등 간접적 수익을 목적으로 본 모델을 이용하는 행위
+      (e) 본 모델의 출력물을 상업적 제품·서비스의 학습 데이터로 사용하는 행위
+    상업적 이용을 원하는 경우 PostAlign 과 별도 서면 계약을 체결해야 합니다.
+    문의: https://huggingface.co/PostAlign
+    Commercial use requires a separate written license from PostAlign.
+
+3.4 재배포 시 조건 / Redistribution
+    본 모델 또는 그 Model Derivative 를 배포하는 경우, 제2조의 Gemma 조건과
+    함께 본 제3조의 비상업 제한을 동일하게 적용하여 배포해야 합니다.
+    Any distribution of the Model or a Model Derivative must pass through both
+    the Gemma terms of Section 2 and the non-commercial restriction of
+    Section 3.
+
+3.5 출력물 / Outputs
+    PostAlign 은 본 모델의 출력물 자체에 대한 소유권을 주장하지 않습니다.
+    다만 상업적 목적으로 출력물을 생성·활용하는 행위는 제3.3조의 상업적 이용에
+    해당하므로 별도 허락이 필요합니다. 출력물의 정확성·적법성에 대한 책임은
+    이용자에게 있습니다.
+    PostAlign claims no ownership of Outputs, but generating or using Outputs
+    for commercial purposes constitutes commercial use under Section 3.3.
+
+
+────────────────────────────────────────────────────────────────────────
+4. 보증 부인 및 책임 제한 / Disclaimer and limitation of liability
+────────────────────────────────────────────────────────────────────────
+
+본 모델은 어떠한 명시적·묵시적 보증 없이 "있는 그대로(AS IS)" 제공됩니다.
+상품성, 특정 목적 적합성, 비침해에 대한 보증을 포함하여 어떠한 보증도 하지
+않습니다. 관련 법령이 허용하는 최대 범위에서 PostAlign 은 본 모델의 사용으로
+발생한 어떠한 직접·간접·부수적·결과적 손해에 대해서도 책임지지 않습니다.
+Google 의 보증 부인 및 책임 제한은 Gemma Terms of Use Section 4.3, 4.4 를
+따릅니다.
+
+THE MODEL IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. TO THE MAXIMUM EXTENT PERMITTED BY LAW, POSTALIGN SHALL NOT BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING FROM THE
+USE OF THE MODEL. Google's disclaimer and limitation of liability are set out
+in Gemma Terms of Use Sections 4.3 and 4.4.
+
+
+────────────────────────────────────────────────────────────────────────
+5. 해석 / Interpretation
+────────────────────────────────────────────────────────────────────────
+
+제2조(Gemma Terms of Use)와 제3조(PostAlign 추가 조건)가 충돌하는 것으로
+해석되는 부분이 있다면, Gemma 및 그로부터 유래한 요소에 관하여는 Gemma Terms of
+Use 가 우선합니다. 제3조는 PostAlign 이 부여하는 권리의 범위를 좁히는 조항일 뿐,
+Gemma Terms of Use 가 부여하는 권리를 확대하거나 대체하지 않습니다.
+
+If any part of Section 3 is read to conflict with Section 2, the Gemma Terms of
+Use prevail as to Gemma and elements derived from it. Section 3 only narrows
+the rights PostAlign grants; it neither expands nor replaces the Gemma Terms of
+Use.
