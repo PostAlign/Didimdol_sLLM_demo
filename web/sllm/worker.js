@@ -40,12 +40,12 @@ const EOS = new Set([1, 106]); // <eos>, <end_of_turn>
 
 // ── 정적 사이트에서 서빙할 파일들 ───────────────────────────────────────────
 const LOCAL = Object.fromEntries(Object.entries({
-  'config.json':            '../model/config.json',
-  'generation_config.json': '../model/generation_config.json',
-  'tokenizer.json':         '../tokenizer/tokenizer.json',
-  'tokenizer_config.json':  '../tokenizer/tokenizer_config.json',
-  'special_tokens_map.json':'../tokenizer/special_tokens_map.json',
-  'added_tokens.json':      '../tokenizer/added_tokens.json',
+  'config.json':            '../../model/config.json',
+  'generation_config.json': '../../model/generation_config.json',
+  'tokenizer.json':         '../../tokenizer/tokenizer.json',
+  'tokenizer_config.json':  '../../tokenizer/tokenizer_config.json',
+  'special_tokens_map.json':'../../tokenizer/special_tokens_map.json',
+  'added_tokens.json':      '../../tokenizer/added_tokens.json',
 }).map(([k, v]) => [k, new URL(v, import.meta.url).href]));
 
 const post = (m) => self.postMessage(m);
@@ -220,8 +220,8 @@ async function load({ device: preferred, dtype: wanted, ios, f16 }) {
     AutoTokenizer.from_pretrained(REPO, { revision: REVISION, progress_callback }),
     // chat_template 은 tokenizer_config.json 에 없고, AutoTokenizer 는 .jinja 를
     // 받아오지 않는다(그 경로는 Processor 전용). 직접 읽어서 명시적으로 넘긴다.
-    fetch(new URL('../tokenizer/chat_template.jinja', import.meta.url)).then(r => r.text()),
-    fetch(new URL('../data.jsonl', import.meta.url)).then(r => r.text()).then(t =>
+    fetch(new URL('../../tokenizer/chat_template.jinja', import.meta.url)).then(r => r.text()),
+    fetch(new URL('../../data.jsonl', import.meta.url)).then(r => r.text()).then(t =>
       t.split('\n').filter(Boolean).map(JSON.parse)),
   ]);
   rouge1 = makeRouge1(tokenizer);

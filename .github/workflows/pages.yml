@@ -4,7 +4,9 @@
 #   index.html, manifest.webmanifest, data.jsonl, web/, tokenizer/, model/
 #
 # model.onnx (1.02 GB) 는 .gitignore 로 제외되어 있고 GitHub 에 올라가지 않는다.
-# web/worker.js 가 Hugging Face 에서 직접 받아오므로 여기서는 다루지 않는다.
+# web/sllm/worker.js 가 Hugging Face 에서 직접 받아오므로 여기서는 다루지 않는다.
+# 견인 모드 추천 모델(web/traction/model/, 1.5 MB)과 데이터셋 100건(web/traction/data/)은
+# web/ 안에 커밋되어 있어 위 목록의 web 으로 함께 배포된다.
 #
 # 저장소 Settings → Pages → Build and deployment → Source 를 "GitHub Actions" 로
 # 한 번 설정해 두어야 한다.
