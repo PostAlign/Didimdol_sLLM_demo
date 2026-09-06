@@ -67,8 +67,11 @@
   .body .pred{color:#0f172a}
   .body .ref{color:#475569}
 
+  /* id 선택자의 display:grid 가 UA 의 [hidden]{display:none} 보다 우선순위가 높아
+     hidden 속성만으로는 숨겨지지 않는다. 명시적으로 눌러 준다. */
   #blocker{position:fixed;inset:0;background:#0f172af2;color:#fff;display:grid;place-items:center;
            padding:32px;z-index:9}
+  #blocker[hidden]{display:none}
   #blocker div{max-width:460px;text-align:center}
   #blocker h2{margin:0 0 10px;font-size:18px}
   #blocker p{margin:0 0 8px;color:#cbd5e1;font-size:14px}

@@ -34,10 +34,12 @@ function iosBlock() {
   const isIOS = /iPad|iPhone|iPod/.test(ua)
              || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   if (!isIOS) return null;
+  // 실제로 쓰는 건 navigator.gpu 다. 버전 문자열은 안내문에만 쓴다 — Chrome iOS·카카오톡 등
+  // 인앱 브라우저는 UA 에 "Version/N" 이 없어서 버전 기준으로 판정하면 WebGPU 가 있어도 막힌다.
+  if (navigator.gpu) return null;
   const major = Number(ua.match(/Version\/(\d+)/)?.[1] ?? 0);
-  if (major >= 26 && navigator.gpu) return null;
   return major
-    ? `감지된 Safari 버전: ${major}${navigator.gpu ? '' : ' · WebGPU 사용 불가'}`
+    ? `감지된 Safari 버전: ${major} · WebGPU 사용 불가`
     : 'WebGPU 를 사용할 수 없는 iOS 브라우저입니다.';
 }
 
