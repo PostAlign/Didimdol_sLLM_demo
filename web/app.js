@@ -4,6 +4,7 @@ const $ = (s) => document.querySelector(s);
 const els = {
   blocker: $('#blocker'), blockWhy: $('#blockWhy'), badges: $('#badges'),
   start: $('#start'), stop: $('#stop'), phase: $('#phase'), homeHint: $('#homeHint'),
+  dtype: $('#dtype'),
   avg: $('#avg'), prep: $('#prep'), runbar: $('#runbar'), rows: $('#rows'),
 };
 const bars = {
@@ -29,11 +30,14 @@ function setBar(el, fraction, label) {
 // ── iOS 게이트 ──────────────────────────────────────────────────────────────
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
            || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+// 디버그: ?ios=1 이면 데스크톱에서도 iOS 의 가중치 로드 경로(스트리밍 캐시)를 태운다. 차단 판정에는 영향 없다.
+const iosLoadPath = isIOS || new URLSearchParams(location.search).get('ios') === '1';
 // 홈 화면에서 실행 중인지. iOS 는 navigator.standalone, 그 외는 display-mode 로 판정한다.
 const isStandalone = navigator.standalone === true
                   || matchMedia('(display-mode: standalone)').matches;
 
-// WebGPU 없이 1.02 GB fp32 를 iOS WASM 으로 돌리면 탭 메모리 한계에서 죽는다.
+// iOS 에서 WASM 은 가중치를 wasm 힙에 한 벌 더 복사해 fp32 는 물론 fp16 도 탭 메모리 한계에
+// 걸린다. WebGPU 는 텐서를 GPU 프로세스로 바로 올려 그 사본이 없다.
 // iOS 의 WebGPU 는 Safari 26 부터라, 그 아래는 시도하지 않고 안내 후 차단한다.
 function iosBlock() {
   const ua = navigator.userAgent;
@@ -66,10 +70,10 @@ async function persistStorage() {
 }
 
 // ── 백엔드 판정 ─────────────────────────────────────────────────────────────
-// tied embedding 이 [262144, 640] fp32 = 671 MB 짜리 단일 텐서다. WebGPU 에서는
-// 이게 스토리지 버퍼 하나로 바인딩되므로, 어댑터 한계가 이보다 작으면 1 GB 를
+// tied embedding 이 [262144, 640] 짜리 단일 텐서다 (fp32 671 MB · fp16 335 MB). WebGPU 에서는
+// 이게 스토리지 버퍼 하나로 바인딩되므로, 어댑터 한계가 이보다 작으면 가중치를
 // 다 받은 뒤 세션 생성에서 터진다. 받기 전에 미리 확인한다.
-const NEED = 262144 * 640 * 4;
+const NEED = (dtype) => 262144 * 640 * (dtype === 'fp16' ? 2 : 4);
 
 async function pickDevice() {
   if (!navigator.gpu) return { device: 'wasm', why: 'WebGPU 미지원 브라우저' };
@@ -80,10 +84,28 @@ async function pickDevice() {
 
   const { maxStorageBufferBindingSize: b, maxBufferSize: m } = adapter.limits;
   const limit = Math.min(b, m);
-  if (limit < NEED) {
-    return { device: 'wasm', limit, why: `GPU 버퍼 한계 부족 (${mb(limit)} < ${mb(NEED)})` };
-  }
   return { device: 'webgpu', limit, why: adapter.info?.description || adapter.info?.vendor || 'GPU' };
+}
+
+// 고른 dtype 이 GPU 버퍼 한계에 걸리면 한 단계 내린다: fp32 → fp16 → WASM(fp32).
+function resolvePlan(chosen, dtype) {
+  if (chosen.device !== 'webgpu') return { device: 'wasm', dtype: 'fp32', note: chosen.why };
+  const { limit } = chosen;
+  if (limit >= NEED(dtype)) return { device: 'webgpu', dtype };
+  if (limit >= NEED('fp16')) {
+    return { device: 'webgpu', dtype: 'fp16',
+             note: `GPU 버퍼 한계 ${mb(limit)} < fp32 필요량 ${mb(NEED('fp32'))} → fp16` };
+  }
+  return { device: 'wasm', dtype: 'fp32',
+           note: `GPU 버퍼 한계 ${mb(limit)} < fp16 필요량 ${mb(NEED('fp16'))} → WASM` };
+}
+
+// dtype 선택은 새로고침 뒤에도 남긴다. 실패로 fp16 에 내려간 뒤에도 그 선택이 유지되게.
+const DTYPE_KEY = 'didimdol.dtype';
+const getDtype = () => els.dtype.value;
+function setDtype(v, persist = true) {
+  els.dtype.value = v;
+  if (persist) { try { localStorage.setItem(DTYPE_KEY, v); } catch {} }
 }
 
 // ── 진행바 (rAF 스로틀) ─────────────────────────────────────────────────────
@@ -94,10 +116,16 @@ const dl = {
 };
 let dirty = false;
 
-function onDl({ which, status, loaded, total }) {
+function onDl({ which, status, loaded, total, stage }) {
   const d = dl[which];
+  if (!d) return;                                   // 그래프 파일(수 MB) 등은 표시하지 않는다
+  if (status === 'reset') {                         // 다음 dtype 시도 → 바를 처음부터
+    Object.assign(d, { seen: false, done: false, loaded: 0, total: 0, markT: 0, markL: 0, bps: 0, stage: undefined });
+    dirty = true; return;
+  }
   if (status === 'done') { d.done = true; dirty = true; return; }
   d.seen = true; d.loaded = loaded; d.total = total;
+  if (stage && stage !== d.stage) { d.stage = stage; d.markT = 0; d.bps = 0; }  // 단계가 바뀌면 속도 표본 리셋
 
   // 속도는 0.25초 이상 벌어진 표본으로만 갱신한다. progress 이벤트는 같은 밀리초에
   // 여러 번 오기도 해서, 매 이벤트로 나누면 Infinity 가 튀어나온다.
@@ -122,7 +150,8 @@ function paint() {
       const speed = Number.isFinite(d.bps) && d.bps > 0 ? d.bps : 0;
       const eta = speed ? (d.total - d.loaded) / speed : 0;
       setBar(el, frac,
-        `${mb(d.loaded)} / ${mb(d.total)} (${Math.floor(frac * 100)}%)`
+        (d.stage === 'cache' ? '캐시에서 읽는 중 · ' : d.stage === 'net' ? '내려받는 중 · ' : '')
+        + `${mb(d.loaded)} / ${mb(d.total)} (${Math.floor(frac * 100)}%)`
         + (speed ? ` \u00b7 ${mb(speed)}/s` : '')
         + (eta > 1 ? ` \u00b7 약 ${eta > 90 ? `${Math.round(eta / 60)}분` : `${Math.round(eta)}초`} 남음` : ''));
     }
@@ -132,13 +161,13 @@ function paint() {
 requestAnimationFrame(paint);
 
 // ── 결과 카드 ───────────────────────────────────────────────────────────────
-function addRow(i, r, error) {
+function addRow(i, r, error, attempts = 1) {
   const d = document.createElement('div');
   d.className = 'r' + (error ? ' err' : '');
   if (error) {
     d.innerHTML = `<div class="head">
       <span class="idx">${i < 0 ? '!' : `#${i + 1}`}</span>
-      <span class="m" style="color:#b91c1c">${i < 0 ? '오류' : '실패'}</span>
+      <span class="m" style="color:#b91c1c">${i < 0 ? '오류' : attempts > 1 ? `${attempts}회 실패` : '실패'}</span>
       <span class="m">${esc(error)}</span>
     </div>`;
   } else {
@@ -150,6 +179,7 @@ function addRow(i, r, error) {
       <span class="m">${r.nTok}토큰 · ${r.tps.toFixed(1)} tok/s</span>
       <span class="m">프롬프트 ${r.promptLen}토큰</span>
       ${r.eos ? '' : '<span class="warn">512 상한 도달</span>'}
+      ${r.attempts > 1 ? `<span class="warn">재시도 후 성공 (${r.attempts}회차)</span>` : ''}
       <span class="f1">R1 ${f3(r.rouge.f1)} <span class="pr">(P ${f3(r.rouge.p)} / R ${f3(r.rouge.r)})</span></span>
     </div>`;
   }
@@ -158,19 +188,64 @@ function addRow(i, r, error) {
 }
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+// ── 로드 도중 프로세스 종료 감지 ────────────────────────────────────────────
+// iOS 는 탭 메모리 한계를 넘으면 WebContent 프로세스를 죽이고 페이지를 조용히 다시 연다.
+// 콘솔도 오류도 남지 않아 "다운로드만 반복"처럼 보인다. 로드 시작 시 표식을 남기고
+// ready/fatal 에서 지우면, 표식이 남은 채 부팅된 경우 = 지난 시도가 도중에 끊긴 것이다.
+// 예외로 잡히는 실패는 워커가 다음 dtype 으로 넘어가지만, 프로세스 종료는 여기서만 잡을 수 있다.
+// fp32 로 죽었으면 다음 시도의 dtype 을 fp16 으로 내려 둔다 — "fp32 로 하고, 안 되면 fp16".
+const ATTEMPT_KEY = 'didimdol.loadAttempt';
+const markAttempt = (device, dtype) => {
+  try { localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ device, dtype, t: Date.now() })); } catch {}
+};
+const clearAttempt = () => { try { localStorage.removeItem(ATTEMPT_KEY); } catch {} };
+function reportBrokenAttempt() {
+  let prev = null;
+  try { prev = JSON.parse(localStorage.getItem(ATTEMPT_KEY) ?? 'null'); } catch {}
+  if (!prev) return;
+  clearAttempt();
+  const when = new Date(prev.t).toLocaleTimeString('ko-KR');
+  let msg = `지난 시도(${when} · ${prev.device} · ${prev.dtype})가 모델 로드 도중 끝났습니다. `
+    + `iOS 에서는 탭 메모리 한계(약 2 GB)를 넘으면 오류 없이 페이지가 다시 열립니다.`;
+  if (prev.dtype === 'fp32') {
+    setDtype('fp16');
+    msg += ' 다음 시도는 fp16 으로 바꿔 두었습니다. 원하면 위에서 fp32 로 되돌릴 수 있습니다.';
+  } else {
+    msg += ' fp16 도 넘는다면 이 기기에서는 실행할 수 없습니다.';
+  }
+  addRow(-1, null, msg);
+}
+
 // ── 워커 ────────────────────────────────────────────────────────────────────
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 let loaded = false, chosen = null, nRows = 100;
+
+// 모듈 import 실패 등 워커 스크립트 자체의 오류는 onmessage 로 오지 않는다.
+worker.onerror = (e) => {
+  els.phase.textContent = '오류';
+  els.prep.hidden = true;
+  addRow(-1, null, `워커 오류: ${e.message ?? e}`);
+  els.start.disabled = false; els.stop.disabled = true;
+};
 
 worker.onmessage = ({ data: m }) => {
   switch (m.type) {
     case 'phase':    els.phase.textContent = m.text; break;
     case 'dl':       onDl(m); break;
+    case 'skip':
+      badge(`⚠ ${m.dtype} 파일 없음 → 건너뜀`, 'cpu');
+      addRow(-1, null, m.why);
+      break;
     case 'fallback':
-      badge('⚠ WebGPU 초기화 실패 → WASM', 'cpu');
-      console.warn('WebGPU fallback:', m.why);
+      badge(`⚠ 실패 → ${m.next}`, 'cpu');
+      addRow(-1, null, `이전 시도 실패, ${m.next} 로 다시 시도합니다: ${m.why}`);
+      markAttempt(m.device, m.dtype);
+      console.warn('fallback:', m.why);
       break;
     case 'ready':
+      clearAttempt();
+      badge(`${m.device === 'webgpu' ? '⚡ WebGPU' : '🐢 WASM(CPU)'} · ${m.dtype} 로 실행 중`,
+            m.device === 'webgpu' ? 'gpu' : 'cpu');
       loaded = true; nRows = m.rows;
       els.prep.hidden = true;
       els.runbar.hidden = false;
@@ -178,7 +253,7 @@ worker.onmessage = ({ data: m }) => {
       worker.postMessage({ type: 'run' });
       break;
     case 'row':
-      addRow(m.i, m.r, m.error);
+      addRow(m.i, m.r, m.error, m.attempts);
       setBar(bars.run, m.progress, `${m.i + 1} / ${nRows}`);
       break;
     case 'done':
@@ -189,6 +264,7 @@ worker.onmessage = ({ data: m }) => {
       els.start.disabled = false; els.stop.disabled = true;
       break;
     case 'fatal':
+      clearAttempt();
       els.phase.textContent = '오류';
       els.prep.hidden = true;
       addRow(-1, null, m.error);
@@ -207,7 +283,10 @@ function finish(m) {
   $('#aEos').innerHTML   = `${m.eos}<span class="u">/ ${m.n}</span>`;
   $('#aWall').innerHTML  = `${(m.wall / 60000).toFixed(1)}<span class="u">분</span>`;
   els.avg.hidden = false;                       // 100/100 완료 시에만 노출
-  els.phase.textContent = `완료 · ${m.n}/${m.total}행` + (m.failed ? ` (실패 ${m.failed}행 포함, 평균은 전체 기준)` : '');
+  const notes = [];
+  if (m.retried) notes.push(`재시도 ${m.retried}행`);
+  if (m.failed) notes.push(`실패 ${m.failed}행 포함, 평균은 전체 기준`);
+  els.phase.textContent = `완료 · ${m.n}/${m.total}행` + (notes.length ? ` (${notes.join(' · ')})` : '');
   els.start.disabled = false; els.stop.disabled = true;
   setBar(bars.run, 1, `${m.n} / ${m.total}`);
 }
@@ -216,15 +295,20 @@ els.start.onclick = () => {
   els.avg.hidden = true;                        // 시작하면 평균은 즉시 다시 숨긴다
   els.rows.replaceChildren();
   els.start.disabled = true; els.stop.disabled = false;
+  els.dtype.disabled = true;                    // 로드된 모델은 바꿀 수 없다. 바꾸려면 새로고침.
   if (loaded) {
     els.runbar.hidden = false;
     setBar(bars.run, 0, `0 / ${nRows}`);
     worker.postMessage({ type: 'run' });
   } else {
     els.prep.hidden = false;
-    worker.postMessage({ type: 'load', device: chosen.device });
+    const p = resolvePlan(chosen, getDtype());
+    if (p.note) badge(`↓ ${p.note}`, 'cpu');
+    markAttempt(p.device, p.dtype);
+    worker.postMessage({ type: 'load', device: p.device, dtype: p.dtype, ios: iosLoadPath });
   }
 };
+els.dtype.onchange = () => setDtype(getDtype());
 els.stop.onclick = () => {
   els.stop.disabled = true;
   els.phase.textContent = '중단하는 중…';
@@ -241,14 +325,15 @@ els.stop.onclick = () => {
     return;
   }
   chosen = await pickDevice();
+  try { setDtype(localStorage.getItem(DTYPE_KEY) || 'fp32', false); } catch { setDtype('fp32', false); }
+  reportBrokenAttempt();                        // fp32 로 죽었으면 여기서 fp16 으로 내린다
   persistStorage();                             // 기다리지 않는다. 승인 여부가 로드를 막지 않는다.
   // iOS Safari 일반 탭은 7일간 상호작용이 없으면 캐시를 통째로 지운다. 홈 화면 앱은
   // 저장소가 분리되어 이 규칙에서 빠지므로, 홈 화면이 아닌 iOS 에서만 한 줄 안내한다.
   if (isIOS && !isStandalone) els.homeHint.hidden = false;
   if (chosen.device === 'webgpu') badge(`⚡ WebGPU · ${chosen.why}`, 'gpu');
   else                            badge(`🐢 WASM(CPU) · ${chosen.why}`, 'cpu');
-  if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)}`);
-  badge(`fp32 · 임계 ${mb(NEED)}`);
+  if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)} (fp32 ${mb(NEED('fp32'))} · fp16 ${mb(NEED('fp16'))} 필요)`);
   badge('temperature 0.3 · top_k 64 · top_p 0.95');
   badge('seed 42');
   badge('max_new_tokens 512');

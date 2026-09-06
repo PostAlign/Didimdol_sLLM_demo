@@ -34,14 +34,15 @@ Google **Gemma 3 270M Instruct**(`gemma-3-270m-it`)를 파인튜닝한 한국어
 | 아키텍처 | `Gemma3ForCausalLM` (decoder-only, 18층, hidden 640, GQA 4q/1kv, head_dim 256) |
 | 컨텍스트 | 32,768 (sliding window 512, 6층마다 full attention) |
 | vocab | 262,144 (Gemma 3 토크나이저 그대로) |
-| 배포 포맷 | ONNX fp32, KV 캐시 포함 단일 그래프 (opset 18, 약 1.07 GB) |
+| 배포 포맷 | ONNX fp32 (약 1.07 GB) · fp16 (약 0.54 GB), KV 캐시 포함 그래프 (opset 18), 가중치는 외부 데이터 파일 |
 | 주 언어 | 한국어 |
 
 ## 파일
 
 | 파일 | 설명 |
 | --- | --- |
-| `model.onnx` | 파인튜닝된 가중치 (ONNX fp32) |
+| `model.onnx` + `model.onnx_data` | 파인튜닝된 모델 (ONNX fp32). 그래프와 가중치(외부 데이터)가 분리되어 있으므로 두 파일을 같은 폴더에 두어야 합니다 |
+| `model_fp16.onnx` + `model_fp16.onnx_data` | 같은 모델의 fp16 변환본. 입출력(`past/present`, `logits`)은 fp32 그대로입니다. 메모리가 빡빡한 기기(iPhone 등)용이며 정확도 기준은 fp32 입니다 |
 | `config.json` / `generation_config.json` | 모델 · 생성 설정 |
 | `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json`, `special_tokens_map.json`, `added_tokens.json` | Gemma 3 토크나이저 |
 | `chat_template.jinja` | Gemma 3 대화 템플릿 (`<start_of_turn>` / `<end_of_turn>`) |

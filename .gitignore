@@ -73,6 +73,7 @@ runs/
 *.bin
 *.gguf
 *.onnx
+*.onnx_data
 
 # Editors / OS
 .idea/

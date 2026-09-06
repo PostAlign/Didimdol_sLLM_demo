@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>디딤돌 sLLM 성능 평가</title>
+<title>디딤돌 성능 평가</title>
 <!-- 홈 화면 웹 앱. iOS 에서 홈 화면에 추가해 실행하면 Safari 와 분리된 저장소를 써서
      7일 미상호작용 삭제(ITP)에서 빠지고 storage.persist() 도 승인된다.
      내려받은 1 GB 모델 캐시를 iOS 에서 유지하는 유일한 길이라 넣어 둔다. -->
@@ -38,7 +38,9 @@
   button.ghost{background:#fff;color:var(--ink);border-color:var(--line);font-weight:500}
   button:disabled{opacity:.45;cursor:not-allowed}
   #phase{color:var(--dim);font-size:13px}
-  #homeHint{color:var(--dim);font-size:12px;margin:-6px 0 14px}
+  #homeHint,#dtypeHint{color:var(--dim);font-size:12px;margin:-6px 0 14px}
+  .opt{font-size:13px;color:var(--dim);display:flex;align-items:center;gap:6px}
+  .opt select{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink)}
 
   /* 평균 패널 — 기본 숨김, 100/100 완료 시에만 노출 */
   #avg{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--green);
@@ -88,7 +90,7 @@
 <div id="blocker" hidden>
   <div>
     <h2>이 기기에서는 실행할 수 없습니다</h2>
-    <p>이 평가는 1.02&nbsp;GB 규모의 fp32 모델을 브라우저에서 직접 구동합니다.
+    <p>이 평가는 fp32 1.07&nbsp;GB(또는 fp16 0.54&nbsp;GB) 모델을 브라우저에서 직접 구동합니다.
        iOS·iPadOS에서는 WebGPU가 필요하며, WebGPU는 <b>Safari 26 이상</b>에서 지원됩니다.</p>
     <p id="blockWhy"></p>
     <p>Safari 26 이상으로 업데이트하거나, 데스크톱 브라우저에서 열어 주세요.</p>
@@ -96,16 +98,22 @@
 </div>
 
 <main>
-  <h1>디딤돌 sLLM 성능 평가</h1>
-  <p class="sub">데이터셋 100행 · 각 행의 마지막 user 질문에 대한 마지막 assistant 응답을 대상으로 측정합니다.</p>
+  <h1>디딤돌 성능 평가</h1>
 
   <div class="badges" id="badges"></div>
 
   <div class="controls">
     <button id="start" disabled>성능 평가 시작</button>
     <button id="stop" class="ghost" disabled>중단</button>
+    <label class="opt">정밀도
+      <select id="dtype">
+        <option value="fp32">fp32 (기본 · 1.07 GB)</option>
+        <option value="fp16">fp16 (0.54 GB)</option>
+      </select>
+    </label>
     <span id="phase">준비 중…</span>
   </div>
+  <p id="dtypeHint">fp32 로 시작해 GPU 버퍼 한계나 로드 오류에 걸리면 fp16 으로 자동 전환합니다. 메모리 한계로 페이지가 다시 열린 경우에도 다음 시도는 fp16 으로 설정됩니다. fp16 은 WebGPU 에서만 실행됩니다.</p>
   <p id="homeHint" hidden>공유 → <b>홈 화면에 추가</b>로 실행하면 내려받은 모델이 Safari의 7일 저장소 삭제에서 제외되어 다음 실행 때 다시 받지 않습니다.</p>
 
   <section id="avg" hidden>
@@ -124,7 +132,7 @@
 
   <section id="prep" hidden>
     <div class="dl" id="dlModel">
-      <div class="row"><b>model.onnx</b><span class="s">대기 중</span></div>
+      <div class="row"><b>가중치 (model.onnx_data)</b><span class="s">대기 중</span></div>
       <div class="bar"><div class="fill"></div></div>
     </div>
     <div class="dl" id="dlTok">

@@ -11,8 +11,12 @@
 아무것도 남지 않기 때문이다. 끊긴 뒤 다시 실행하면 원격 크기가 일치하는
 파일은 건너뛰므로 남은 것만 이어서 올라간다.
 
-배포 포맷은 ONNX(fp32) 하나다. 레포 루트에 config/토크나이저와 model.onnx 를
-평평하게 올려 optimum 의 ORTModelForCausalLM.from_pretrained 가 그대로 읽게 한다.
+배포 포맷은 ONNX 외부 데이터 두 벌이다 (build_web_models.py 가 model/web/ 에 만든다).
+  model.onnx + model.onnx_data            fp32 (그래프 + 가중치)
+  model_fp16.onnx + model_fp16.onnx_data  fp16
+레포 루트에 config/토크나이저와 함께 평평하게 올려 optimum 의
+ORTModelForCausalLM.from_pretrained 와 브라우저의 transformers.js 가 그대로 읽게 한다.
+단일 파일이 아닌 이유는 build_web_models.py 머리말에 있다 (iPhone 메모리 한계).
 
 LICENSE / NOTICE / gemma_terms.md 는 Gemma Terms of Use 3.1 이 요구하는
 사본·고지 조건을 맞추기 위한 파일이라 반드시 함께 올린다.
@@ -30,6 +34,7 @@ TOKEN_ENV = "HF_ACCOUNT_POSTALIGN"
 
 ROOT = Path(__file__).parent
 MODEL = ROOT / "model"
+WEB = MODEL / "web"          # build_web_models.py 산출물
 TOK = ROOT / "tokenizer"
 
 # (로컬 경로, 레포 내 경로). 작은 파일부터 올려 레포 페이지가 먼저 형태를 갖추게 한다.
@@ -46,7 +51,10 @@ FILES = [
     (TOK / "tokenizer_config.json", "tokenizer_config.json"),
     (TOK / "tokenizer.model", "tokenizer.model"),
     (TOK / "tokenizer.json", "tokenizer.json"),
-    (MODEL / "model.onnx", "model.onnx"),
+    (WEB / "model.onnx", "model.onnx"),
+    (WEB / "model_fp16.onnx", "model_fp16.onnx"),
+    (WEB / "model_fp16.onnx_data", "model_fp16.onnx_data"),
+    (WEB / "model.onnx_data", "model.onnx_data"),
 ]
 
 
