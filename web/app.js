@@ -3,7 +3,7 @@
 const $ = (s) => document.querySelector(s);
 const els = {
   blocker: $('#blocker'), blockWhy: $('#blockWhy'), badges: $('#badges'),
-  start: $('#start'), stop: $('#stop'), phase: $('#phase'),
+  start: $('#start'), stop: $('#stop'), phase: $('#phase'), homeHint: $('#homeHint'),
   avg: $('#avg'), prep: $('#prep'), runbar: $('#runbar'), rows: $('#rows'),
 };
 const bars = {
@@ -27,12 +27,16 @@ function setBar(el, fraction, label) {
 }
 
 // ── iOS 게이트 ──────────────────────────────────────────────────────────────
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+           || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+// 홈 화면에서 실행 중인지. iOS 는 navigator.standalone, 그 외는 display-mode 로 판정한다.
+const isStandalone = navigator.standalone === true
+                  || matchMedia('(display-mode: standalone)').matches;
+
 // WebGPU 없이 1.02 GB fp32 를 iOS WASM 으로 돌리면 탭 메모리 한계에서 죽는다.
 // iOS 의 WebGPU 는 Safari 26 부터라, 그 아래는 시도하지 않고 안내 후 차단한다.
 function iosBlock() {
   const ua = navigator.userAgent;
-  const isIOS = /iPad|iPhone|iPod/.test(ua)
-             || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   if (!isIOS) return null;
   // 실제로 쓰는 건 navigator.gpu 다. 버전 문자열은 안내문에만 쓴다 — Chrome iOS·카카오톡 등
   // 인앱 브라우저는 UA 에 "Version/N" 이 없어서 버전 기준으로 판정하면 WebGPU 가 있어도 막힌다.
@@ -41,6 +45,24 @@ function iosBlock() {
   return major
     ? `감지된 Safari 버전: ${major} · WebGPU 사용 불가`
     : 'WebGPU 를 사용할 수 없는 iOS 브라우저입니다.';
+}
+
+// ── 저장소 영구화 ───────────────────────────────────────────────────────────
+// 내려받은 model.onnx (1 GB) 는 transformers.js 가 Cache API 에 넣어 재방문 때 다시 쓴다.
+// Cache API 는 기본이 best-effort 라 디스크가 부족하면 브라우저가 지울 수 있다.
+// persist() 가 승인되면 그 삭제 대상에서 빠진다. persist() 는 Window 전용이라
+// 워커가 아니라 여기서 부른다. 결과는 흐름에 영향 없고 콘솔에만 남긴다.
+//   Chrome  : 사이트 관여도 기준으로 조용히 승인/거절
+//   Firefox : 권한 프롬프트가 뜰 수 있음
+//   Safari  : 홈 화면 앱일 때만 사실상 승인. 일반 탭의 7일 미상호작용 삭제(ITP)는
+//             승인 여부와 무관하게 적용되므로, iOS 는 홈 화면 추가 안내로 보완한다.
+async function persistStorage() {
+  try {
+    const ok = await navigator.storage?.persist?.();
+    if (ok !== undefined) console.info(`storage.persist(): ${ok ? '승인' : '거절'}`);
+  } catch (e) {
+    console.warn('storage.persist() 실패:', e);
+  }
 }
 
 // ── 백엔드 판정 ─────────────────────────────────────────────────────────────
@@ -111,26 +133,24 @@ requestAnimationFrame(paint);
 
 // ── 결과 카드 ───────────────────────────────────────────────────────────────
 function addRow(i, r, error) {
-  const d = document.createElement('details');
+  const d = document.createElement('div');
   d.className = 'r' + (error ? ' err' : '');
   if (error) {
-    d.innerHTML = `<summary><span class="idx">${i < 0 ? '!' : `#${i + 1}`}</span>
-      <span class="m" style="color:#b91c1c">${i < 0 ? '오류' : '실패'}</span></summary>
-      <div class="body"><p>${esc(error)}</p></div>`;
+    d.innerHTML = `<div class="head">
+      <span class="idx">${i < 0 ? '!' : `#${i + 1}`}</span>
+      <span class="m" style="color:#b91c1c">${i < 0 ? '오류' : '실패'}</span>
+      <span class="m">${esc(error)}</span>
+    </div>`;
   } else {
-    d.innerHTML = `<summary>
+    d.innerHTML = `<div class="head">
       <span class="idx">#${i + 1}</span>
       <span class="turn">${r.turns}턴</span>
       <span class="m">TTFT <b>${ms(r.ttft)}</b></span>
       <span class="m">총 <b>${ms(r.total)}</b></span>
       <span class="m">${r.nTok}토큰 · ${r.tps.toFixed(1)} tok/s</span>
+      <span class="m">프롬프트 ${r.promptLen}토큰</span>
       ${r.eos ? '' : '<span class="warn">512 상한 도달</span>'}
-      <span class="f1">R1 ${f3(r.rouge.f1)}</span>
-    </summary>
-    <div class="body">
-      <div><h4>생성 (P ${f3(r.rouge.p)} / R ${f3(r.rouge.r)} · 프롬프트 ${r.promptLen}토큰)</h4>
-        <p class="pred">${esc(r.pred)}</p></div>
-      <div><h4>정답</h4><p class="ref">${esc(r.ref)}</p></div>
+      <span class="f1">R1 ${f3(r.rouge.f1)} <span class="pr">(P ${f3(r.rouge.p)} / R ${f3(r.rouge.r)})</span></span>
     </div>`;
   }
   els.rows.append(d);
@@ -187,7 +207,7 @@ function finish(m) {
   $('#aEos').innerHTML   = `${m.eos}<span class="u">/ ${m.n}</span>`;
   $('#aWall').innerHTML  = `${(m.wall / 60000).toFixed(1)}<span class="u">분</span>`;
   els.avg.hidden = false;                       // 100/100 완료 시에만 노출
-  els.phase.textContent = `완료 · ${m.n}/${m.total}행`;
+  els.phase.textContent = `완료 · ${m.n}/${m.total}행` + (m.failed ? ` (실패 ${m.failed}행 포함, 평균은 전체 기준)` : '');
   els.start.disabled = false; els.stop.disabled = true;
   setBar(bars.run, 1, `${m.n} / ${m.total}`);
 }
@@ -221,6 +241,10 @@ els.stop.onclick = () => {
     return;
   }
   chosen = await pickDevice();
+  persistStorage();                             // 기다리지 않는다. 승인 여부가 로드를 막지 않는다.
+  // iOS Safari 일반 탭은 7일간 상호작용이 없으면 캐시를 통째로 지운다. 홈 화면 앱은
+  // 저장소가 분리되어 이 규칙에서 빠지므로, 홈 화면이 아닌 iOS 에서만 한 줄 안내한다.
+  if (isIOS && !isStandalone) els.homeHint.hidden = false;
   if (chosen.device === 'webgpu') badge(`⚡ WebGPU · ${chosen.why}`, 'gpu');
   else                            badge(`🐢 WASM(CPU) · ${chosen.why}`, 'cpu');
   if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)}`);

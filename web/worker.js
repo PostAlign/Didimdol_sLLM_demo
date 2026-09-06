@@ -21,6 +21,7 @@ const REPO = 'PostAlign/Didimdol_sLLM';
 // main 이 아니라 커밋 SHA 로 고정한다. transformers.js 의 브라우저 캐시 키는 원격 URL 이고
 // ETag 검증을 하지 않으므로, main 에 새 model.onnx 를 올리면 재방문자가 옛 모델을
 // 무기한 캐시에서 계속 쓰게 된다. SHA 를 갈면 URL 이 바뀌어 캐시가 자연히 갈린다.
+// 갈린 옛 SHA 항목(1 GB)은 저절로 사라지지 않으므로 load() 의 pruneStaleCache 가 지운다.
 const REVISION = '84ab5425d15ece6493bab3106af14e3584532a5f';
 
 const GEN = {
@@ -73,8 +74,30 @@ let chatTemplate = null, rows = null;
 let device = 'wasm', aborted = false;
 const stopper = new InterruptableStoppingCriteria();
 
+// ── 옛 REVISION 캐시 정리 ───────────────────────────────────────────────────
+// transformers.js 는 받은 파일을 Cache API 의 env.cacheKey 저장소에 원격 URL 을 키로 넣는다.
+// REVISION 을 갈면 새 URL 로 다시 받지만 옛 SHA 의 model.onnx 는 그대로 남는다.
+// 새 파일을 받기 *전에* 지워야 한다 — Safari 처럼 용량이 빡빡한 곳에서 옛 1 GB 가
+// 남아 있으면 새 1 GB 의 cache.put 이 QuotaExceeded 로 실패하고, 그러면 다음 방문에
+// 또 재다운로드하게 된다. 이 레포 항목만 건드리고 다른 레포·앱 항목은 두지 않는다.
+async function pruneStaleCache() {
+  if (typeof caches === 'undefined') return;
+  try {
+    const cache = await caches.open(env.cacheKey);
+    const stale = (await cache.keys()).filter(({ url }) =>
+      url.includes(`/${REPO}/`) && !url.includes(`/${REVISION}/`));
+    await Promise.all(stale.map((req) => cache.delete(req)));
+    if (stale.length) console.info(`옛 REVISION 캐시 ${stale.length}개 삭제`);
+  } catch (e) {
+    // 시크릿 모드·iframe 등에서 open 이 거부될 수 있다. 캐시 정리는 부가 기능이므로 넘어간다.
+    console.warn('캐시 정리 건너뜀:', e);
+  }
+}
+
 // ── 로드 ────────────────────────────────────────────────────────────────────
 async function load(preferred) {
+  await pruneStaleCache();
+
   // COOP/COEP 가 없으면 SharedArrayBuffer 를 못 써서 ORT 가 어차피 싱글스레드로 떨어진다.
   try {
     env.backends.onnx.wasm.numThreads =
@@ -183,20 +206,33 @@ async function runAll() {
   for (let i = 0; i < rows.length; ++i) {
     if (aborted) { post({ type: 'aborted', at: i }); return; }
     post({ type: 'phase', text: `평가 중… ${i + 1}/${rows.length}` });
+    const t0 = performance.now();
     try {
       const r = await runRow(rows[i]);
       done.push(r);
       post({ type: 'row', i, r, progress: (i + 1) / rows.length });
     } catch (e) {
-      post({ type: 'row', i, error: String(e?.stack ?? e?.message ?? e), progress: (i + 1) / rows.length });
+      // 실패한 행도 분모에 넣는다. 평균은 항상 전체 행 기준이어야 하므로
+      // 산출물 없음(ROUGE 0, EOS 아님, 속도 0)으로 기록하고 시간은 실패까지 실제 걸린 만큼 잡는다.
+      const elapsed = performance.now() - t0;
+      const error = String(e?.stack ?? e?.message ?? e);
+      done.push({
+        turns: rows[i].messages.length / 2, promptLen: 0, nTok: 0, eos: false,
+        ttft: elapsed, total: elapsed, tps: 0,
+        rouge: { p: 0, r: 0, f1: 0 }, pred: '', ref: rows[i].messages.at(-1).content,
+        failed: true, error,
+      });
+      post({ type: 'row', i, error, progress: (i + 1) / rows.length });
     }
   }
   if (aborted) { post({ type: 'aborted', at: rows.length }); return; }
 
+  // done.length === rows.length. 512 상한에 걸린 행, 예외로 실패한 행 모두 포함한 전체 평균.
   const avg = (f) => done.reduce((s, r) => s + f(r), 0) / done.length;
   post({
     type: 'done',
     n: done.length, total: rows.length,
+    failed: done.filter(r => r.failed).length,
     ttft: avg(r => r.ttft), totalMs: avg(r => r.total), tps: avg(r => r.tps),
     p: avg(r => r.rouge.p), r: avg(r => r.rouge.r), f1: avg(r => r.rouge.f1),
     eos: done.filter(r => r.eos).length,
