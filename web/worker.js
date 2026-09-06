@@ -150,13 +150,16 @@ async function pruneStaleCache() {
 
 // ── 로드 ────────────────────────────────────────────────────────────────────
 // 시도 순서. 앞 것이 예외로 실패하면 다음으로 넘어간다.
-//   (선호 device, 고른 dtype) → [webgpu 면] (webgpu, fp16) → (wasm, fp32)
+//   (선호 device, 고른 dtype) → [webgpu 이고 shader-f16 이 있으면] (webgpu, fp16) → (wasm, fp32)
 // fp16 은 WebGPU 에서만 시도한다. wasm CPU 는 fp16 커널이 드물어 느리거나 실패한다.
+// f16 은 app.js 의 fp16Blocked() 판정(어댑터의 shader-f16 지원 여부)이다. 이게 false 인데도
+// fp16 을 큐에 넣으면 transformers.js 가 "The device (webgpu) does not support fp16." 로
+// 던져서, 화면에는 원인 없는 실패 한 줄만 남고 결국 fp32 로 내려간다. 아예 넣지 않는다.
 // 메모리 초과로 프로세스가 죽는 경우는 예외가 아니라 페이지 재시작이라 여기서 못 잡는다.
 // 그건 app.js 가 localStorage 표식으로 감지해 다음 시도 dtype 을 fp16 으로 내린다.
-function plan(preferred, wanted) {
+function plan(preferred, wanted, f16) {
   const p = [{ device: preferred, dtype: wanted }];
-  if (preferred === 'webgpu' && wanted === 'fp32') p.push({ device: 'webgpu', dtype: 'fp16' });
+  if (preferred === 'webgpu' && wanted === 'fp32' && f16) p.push({ device: 'webgpu', dtype: 'fp16' });
   if (!(preferred === 'wasm' && wanted === 'fp32')) p.push({ device: 'wasm', dtype: 'fp32' });
   return p;
 }
@@ -175,7 +178,7 @@ async function available(dtype) {
   }
 }
 
-async function load({ device: preferred, dtype: wanted, ios }) {
+async function load({ device: preferred, dtype: wanted, ios, f16 }) {
   streamCache = !!ios;
   env.useBrowserCache = !ios;   // iOS 는 가중치를 streamCachedFetch 가 직접 캐시한다
   await pruneStaleCache();
@@ -230,7 +233,7 @@ async function load({ device: preferred, dtype: wanted, ios }) {
     progress_callback,
   };
   let lastErr = null;
-  for (const [i, attempt] of plan(preferred, wanted).entries()) {
+  for (const [i, attempt] of plan(preferred, wanted, f16).entries()) {
     const label = `${attempt.device === 'webgpu' ? 'WebGPU' : 'WASM'} · ${attempt.dtype}`;
     if (!(await available(attempt.dtype))) {
       lastErr = new Error(`${FILE[attempt.dtype]} 이(가) 레포 ${REPO}@${REVISION.slice(0, 7)} 에 없어 ${attempt.dtype} 은 건너뜁니다`);
