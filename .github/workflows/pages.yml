@@ -31,9 +31,48 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: |
+          npm ci --ignore-scripts
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-tools.txt
+
+      - name: Restore patched runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: web/vendor
+          key: ort-range-v1-${{ runner.os }}-${{ hashFiles('patches/**', 'tools/build-ort.sh', 'tools/build-runtime.mjs', 'package-lock.json', 'requirements-tools.txt') }}
+
+      - name: Build pinned ORT fork (Asyncify and JSPI)
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          source .venv/bin/activate
+          bash tools/build-ort.sh asyncify
+          bash tools/build-ort.sh jspi
+
+      - name: Verify runtime
+        run: |
+          npm test
+          .venv/bin/python3 -m unittest discover -s tests -p 'test_*.py'
+          .venv/bin/python3 tools/make_test_model.py
+          .venv/bin/python3 tools/prepare_experiments.py .work/test-model .work/test-experiments
+          npx playwright install --with-deps chromium
+          npm run test:browser
 
       - name: Assemble site
         run: |

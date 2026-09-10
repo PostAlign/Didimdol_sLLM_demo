@@ -24,7 +24,8 @@ fp16 은 만들지 않는다. 품질이 fp32 에 못 미쳐(Gemma 3 는 fp16 에
 
 3. 외부 데이터 파일 분할
    가중치를 FILE_CAP 이하의 파일 여러 개로 나눈다. 브라우저 워커(web/sllm/worker.js)가 파일 단위로
-   받아 캐시하고 Blob 으로 마운트하므로, 한 번에 메모리에 있는 가중치는 파일 하나 이하다.
+   받아 캐시하고 Blob 으로 마운트한다. 물리 파일 크기는 runtime staging 크기와 별개이며,
+   Blob backing 의 실제 메모리 사용량은 브라우저 구현에 따라 달라진다.
    파일 이름은 transformers.js 의 규약(model.onnx_data, model.onnx_data_1, …)을 따른다.
 
   python build_web_models.py            # 산출물 생성
@@ -183,7 +184,9 @@ def save_external(model: onnx.ModelProto, path: Path, cap: int) -> list[Path]:
         raw = numpy_helper.to_array(t).tobytes()
         if len(raw) < INLINE_THRESHOLD:
             continue
-        if fh is None or size + len(raw) > cap:
+        if len(raw) > cap:
+            raise ValueError(f"{t.name}: tensor {len(raw)} exceeds file cap {cap}; use physical transport shards")
+        if fh is None or size + (-size) % 64 + len(raw) > cap:
             if fh:
                 fh.close()
             name = base if not files else f"{base}_{len(files)}"
@@ -196,7 +199,7 @@ def save_external(model: onnx.ModelProto, path: Path, cap: int) -> list[Path]:
         set_external_data(t, location=name, offset=size, length=len(raw))
         for f in ("float_data", "int32_data", "int64_data", "double_data", "uint64_data", "string_data"):
             t.ClearField(f)
-        t.raw_data = b""
+        t.ClearField("raw_data")
         t.data_location = TensorProto.EXTERNAL
         size += len(raw)
     if fh:

@@ -1,0 +1,535 @@
+{
+  "recordedAt": "2026-09-10T13:53:47.074120+00:00",
+  "ortCommit": "b7804b056c30aa35c1748f8e4e239d0e2ff25d6d",
+  "patchSha256": "7ee3f1c7cb839e9688293ebbfbbc524ebc39893d109007b126f900d02d2a49c6",
+  "environment": {
+    "os": "Linux/WSL",
+    "browser": "Google Chrome for Testing 145.0.7632.6",
+    "gpu": "SwiftShader (software WebGPU)",
+    "node": "22.22.1",
+    "emscripten": "4.0.23",
+    "iphoneTested": false
+  },
+  "scope": [
+    "5 JavaScript unit tests passed",
+    "2 ONNX metadata/export tests passed",
+    "Asyncify and JSPI C++/WASM builds completed",
+    "ORT C++ lintrunner checks passed",
+    "App worker imported successfully",
+    "App AutoModelForCausalLM.from_pretrained loaded full FP32 model"
+  ],
+  "limitations": [
+    "Logical allocation counters are not process RSS or all driver allocations",
+    "WASM heap peak is sampled linear memory capacity, not allocator high-water tracing",
+    "Stock cpuStagingPeak is maximum observed slice size, excludes GC-retained older slices",
+    "Full-model Chrome tests override incognito storage quota to 8 GiB",
+    "No iPhone/Safari device was available"
+  ],
+  "artifacts": {
+    "ort-wasm-simd-threaded.jspi.wasm": {
+      "bytes": 14861694,
+      "sha256": "227e4951e1a2d4e3765b4d1244065cd317b4cd86a5f06ab3ef82b52da30c70e4"
+    },
+    "ort-wasm-simd-threaded.asyncify.mjs": {
+      "bytes": 65424,
+      "sha256": "2b2dfc9dc58d27cf582ae52895e485d8741caa6c0d0c72c5bddd8400b382fbcb"
+    },
+    "ort-wasm-simd-threaded.asyncify.wasm": {
+      "bytes": 31582372,
+      "sha256": "1606e48ef20ce97e34f4f9de295260a223cb18d30319d27c88c13df7c6db301a"
+    },
+    "ort-wasm-simd-threaded.jspi.mjs": {
+      "bytes": 38354,
+      "sha256": "4c6e8e547e2fdd66d2884c324642a5b54e5a8d362a3fa8aa5fffd242407ebb0e"
+    }
+  },
+  "runs": [
+    {
+      "id": "smoke-asyncify",
+      "kind": "range",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789048015451,
+      "pageReloadObserved": false,
+      "lastInitializer": "bias",
+      "sessionCreateMs": 527,
+      "uploadDrainMs": 0.5,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 10354688,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 10496000,
+        "mappedUploadRequested": 0,
+        "bufferCount": 2,
+        "deviceLost": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null
+      },
+      "completedAt": 1789048016617
+    },
+    {
+      "id": "smoke-jspi",
+      "kind": "range",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789048016673,
+      "pageReloadObserved": false,
+      "lastInitializer": "bias",
+      "sessionCreateMs": 247.60000000009313,
+      "uploadDrainMs": 0.6000000000931323,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 10027008,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 10496000,
+        "mappedUploadRequested": 0,
+        "bufferCount": 2,
+        "deviceLost": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null
+      },
+      "completedAt": 1789048017383
+    },
+    {
+      "id": "smoke-stock",
+      "kind": "stock",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789048017435,
+      "pageReloadObserved": false,
+      "lastInitializer": "bias",
+      "sessionCreateMs": 367,
+      "uploadDrainMs": 3.5,
+      "metrics": {
+        "cpuStagingPeak": 10485760,
+        "wasmHeapPeak": null,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 2
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 20971520,
+        "mappedUploadRequested": 10496000,
+        "bufferCount": 4,
+        "deviceLost": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 20971520,
+        "mappedUploadRequested": 10504192,
+        "bufferCount": 13,
+        "deviceLost": null
+      },
+      "completedAt": 1789048018287
+    },
+    {
+      "id": "Gemma-FP32-16MiB",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 16,
+      "success": true,
+      "startedAt": 1789048018341,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7235",
+      "sessionCreateMs": 5593.300000000279,
+      "uploadDrainMs": 0.7999999998137355,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 18874368,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 283,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "decode": [
+        {
+          "step": 0,
+          "token": 1106,
+          "ms": 4633.299999999814
+        },
+        {
+          "step": 1,
+          "token": 4940,
+          "ms": 2902.899999999907
+        }
+      ],
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 1075809984,
+        "requestedPeak": 1076858560,
+        "mappedUploadRequested": 3504,
+        "bufferCount": 1591,
+        "deviceLost": null
+      },
+      "completedAt": 1789048035768,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "A",
+      "kind": "stock",
+      "fileMiB": 128,
+      "success": true,
+      "startedAt": 1789048035865,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_6946",
+      "sessionCreateMs": 3220.100000000093,
+      "uploadDrainMs": 7.7000000001862645,
+      "metrics": {
+        "cpuStagingPeak": 41943040,
+        "wasmHeapPeak": null,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 251
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "completedAt": 1789048043411,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "B",
+      "kind": "stock",
+      "fileMiB": 64,
+      "success": true,
+      "startedAt": 1789048043538,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_6946",
+      "sessionCreateMs": 3420.899999999907,
+      "uploadDrainMs": 7.7999999998137355,
+      "metrics": {
+        "cpuStagingPeak": 41943040,
+        "wasmHeapPeak": null,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 251
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "completedAt": 1789048051932,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "C",
+      "kind": "stock",
+      "fileMiB": 32,
+      "success": true,
+      "startedAt": 1789048052044,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_6946",
+      "sessionCreateMs": 3456.9000000003725,
+      "uploadDrainMs": 9,
+      "metrics": {
+        "cpuStagingPeak": 41943040,
+        "wasmHeapPeak": null,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 251
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1075020736,
+        "mappedUploadRequested": 1072395768,
+        "bufferCount": 1526,
+        "deviceLost": null
+      },
+      "completedAt": 1789048059472,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "D",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 64,
+      "success": true,
+      "startedAt": 1789048059580,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7235",
+      "sessionCreateMs": 5524,
+      "uploadDrainMs": 0.6999999997206032,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 69206016,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 251,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "completedAt": 1789048069759,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "E",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 32,
+      "success": true,
+      "startedAt": 1789048069863,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7235",
+      "sessionCreateMs": 5630.700000000186,
+      "uploadDrainMs": 0.8999999999068677,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 35651584,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 267,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "completedAt": 1789048079789,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "F",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 16,
+      "success": true,
+      "startedAt": 1789048079892,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7235",
+      "sessionCreateMs": 5689.5,
+      "uploadDrainMs": 0.8000000002793968,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 18874368,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 283,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "completedAt": 1789048089238,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "G",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789048089341,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7235",
+      "sessionCreateMs": 5761,
+      "uploadDrainMs": 0.7999999998137355,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 10485760,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 315,
+        "deviceLost": null
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "completedAt": 1789048099276,
+      "testStorageQuotaOverrideBytes": 8589934592
+    },
+    {
+      "id": "app-from-pretrained",
+      "success": true,
+      "stage": "session-create-complete",
+      "runtimeMode": "asyncify",
+      "stagingMiB": 16,
+      "durationMs": 8205.399999999907,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 18874368,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 283,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401888,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "lastInitializer": {
+        "initializerName": "onnx::Mul_7235",
+        "shape": [
+          640
+        ],
+        "index": 116,
+        "offset": 66878464,
+        "length": 2560,
+        "location": "model.onnx_data_1"
+      }
+    }
+  ]
+}

@@ -1,42 +1,12 @@
-/**
- * 평가 워커 — 모델 로드 · 생성 · 채점을 전부 여기서 한다.
- *
- * 메인 스레드에서 돌리면 100행 × 최대 512토큰 디코드가 UI 를 얼려서
- * "스크롤하며 결과 보기" 자체가 성립하지 않는다.
- *
- * 파일 출처가 둘로 갈린다.
- *   model.onnx / model.onnx_data* → Hugging Face (커밋 SHA 고정)
- *   그 외 config/토크나이저       → 이 정적 사이트
- * transformers.js 는 한 곳에서만 받아오므로 env.fetch 를 후킹해 갈라 보낸다.
- *
- * 정밀도는 fp32 하나다. fp16 은 품질이 평가 기준이 못 되어 폐기했다.
- *
- * ── 가중치는 transformers.js 에 맡기지 않고 여기서 직접 다룬다 ──────────────────────
- * transformers.js 의 로더는 가중치 파일을 통째로 JS 버퍼(1.07 GB)에 읽은 뒤 ORT 에 넘긴다.
- * WASM 이면 ORT 가 그걸 텐서마다 wasm 힙으로 복사하므로 같은 바이트가 두 벌(2.1 GB)이 되고,
- * WebGPU 라도 세션이 만들어질 때까지 1 GB 버퍼가 살아 있다. 스마트폰은 여기서 죽는다.
- *
- * 대신 이렇게 한다 (build_web_models.py 가 가중치를 128 MiB 이하 파일 여러 개로 나눠 둔다).
- *   ① 파일마다: Cache API 에 있으면 그대로, 없으면 네트워크 스트림을 cache.put 에 흘려 넣는다.
- *      JS 힙에 버퍼를 만들지 않는다. 캐시가 안 되면 그냥 스트림으로 Blob 을 만든다.
- *   ② 파일마다 Response.blob() 으로 Blob 을 얻는다. Blob 은 브라우저가 디스크/브라우저 프로세스에
- *      두므로 워커 힙에는 없다.
- *   ③ ORT 에는 Blob 을 감싼 BlobFile 을 외부 데이터로 마운트한다. ORT 웹의 외부 데이터 로더는
- *      마운트된 파일에서 byteLength 와 subarray(offset, offset+len) 만 쓰므로, subarray 를
- *      FileReaderSync 로 그 구간만 동기적으로 읽어 돌려주면 텐서 하나 분량만 메모리를 지난다.
- *      WebGPU 는 그 조각을 GPU 버퍼에 바로 올리고, WASM 은 wasm 힙에 복사한다.
- * 그래서 로드 중 워커 힙의 피크는 "가장 큰 텐서(41.9 MB) 한 개" 수준이다. 가중치 총량은 GPU(또는
- * wasm 힙)에 한 벌만 있다.
- *
- * ORT 로더가 mountedFile.byteLength / .subarray 만 쓴다는 건 transformers.js 4.2.0 이 묶은
- * onnxruntime-web 1.26.0-dev.20260416 의 asyncify 빌드 기준이다. transformers.js 를 올리면 다시 확인한다.
- * 만약 그 경로가 깨지면(외부 데이터 오류) 옛 방식(파일을 통째로 버퍼에 읽기)으로 한 번 더 시도한다.
- */
+/** FP32 WebGPU evaluation worker. Range loading is only permitted during
+ * OrtCreateSession. See docs/session-create-memory.md for the source audit. */
 
-import {
-  AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
-  InterruptableStoppingCriteria, env, random,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || 'asyncify';
+const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
+  InterruptableStoppingCriteria, env, random } = await import(`./runtime.js?mode=${runtimeMode}`);
+import { SessionRangeLoader } from './range-loader.js';
+import { saveCheckpoint } from './diagnostics.js';
+import { installGpuTracking } from './gpu-device.js';
 
 import { makeRouge1 } from './rouge.js';
 
@@ -73,11 +43,13 @@ const GRAPH = 'model.onnx';
 const isWeights = (name) => /(^|\/)model\.onnx_data(_\d+)?$/.test(name.split('?')[0]);
 const resolveUrl = (name) => `https://huggingface.co/${REPO}/resolve/${REVISION}/${name}`;
 
+let verifiedGraph = null;
 const baseFetch = env.fetch ?? fetch;
 env.fetch = (input, init) => {
   const url = typeof input === 'string' ? input : (input?.url ?? String(input));
   if (url.includes('huggingface.co')) {
     const name = url.split('?')[0].split('/').pop();
+    if (name === GRAPH && verifiedGraph) return Promise.resolve(new Response(verifiedGraph));
     if (LOCAL[name]) return fetch(LOCAL[name], init);          // → 정적 사이트
   }
   return baseFetch(input, init);                               // → HF
@@ -156,6 +128,8 @@ async function weightBlob(file, onBytes) {
       await cache.put(url, counted(res, onBytes));
       const hit = await cache.match(url);
       if (hit) return { blob: await hit.blob(), stage: 'net' };
+      // The response was consumed by cache.put; fetch a new stream if evicted immediately.
+      res = await fetchOk();
     } catch (e) {
       // 쿼터 초과 등. 스트림은 이미 소비됐으므로 새로 받는다. 이번 방문에서만 쓰고 저장하지 않는다.
       console.warn(`${file.name} 캐시 저장 실패, 저장 없이 다시 받는다:`, e);
@@ -166,11 +140,9 @@ async function weightBlob(file, onBytes) {
   return { blob: await counted(res, onBytes).blob(), stage: 'net' };
 }
 
-// ── ORT 외부 데이터로 마운트할 Blob 래퍼 ───────────────────────────────────────
-// ORT 웹 로더는 마운트된 파일에서 byteLength 와 subarray 만 쓴다 (파일 머리말 참고).
-// Uint8Array 를 상속해야 onnxruntime-web 의 loadFile 이 통과시킨다 (아니면 new Uint8Array(obj) 로
-// 통째로 복사하려 든다). 본체는 길이 0 이고, 실제 바이트는 subarray 가 Blob 에서 그 구간만 읽는다.
-class BlobFile extends Uint8Array {
+// Stock comparison preserves the old BlobFile path without eager full-file
+// materialization. Production passes real Blob objects to the patched API.
+class StockBlobFile extends Uint8Array {
   constructor(blob) { super(0); this.blob = blob; this.reader = new FileReaderSync(); }
   get byteLength() { return this.blob.size; }
   get length() { return this.blob.size; }
@@ -178,36 +150,29 @@ class BlobFile extends Uint8Array {
     return new Uint8Array(this.reader.readAsArrayBuffer(this.blob.slice(begin, end)));
   }
 }
-
-// 가중치 전부를 [{ path, data }] 로. buffered 면 옛 방식(파일을 통째로 버퍼에) — BlobFile 경로가
-// 깨졌을 때의 마지막 수단이다. FileReaderSync 가 없는 환경(사실상 없음)도 여기로 온다.
-let weightFiles = null;   // listWeightFiles() 결과. 시도마다 다시 조회하지 않는다.
-let weightBlobs = null;   // { name → Blob }. WASM 폴백 때 다시 받지 않는다.
-
-async function mountWeights({ buffered }) {
+let weightFiles = null;
+let weightBlobs = null;
+async function mountWeights(manifest) {
   weightFiles ??= await listWeightFiles();
   weightBlobs ??= {};
-  const total = weightFiles.reduce((s, f) => s + f.size, 0);
+  const total = weightFiles.reduce((sum, file) => sum + file.size, 0);
   let before = 0;
   const out = [];
   for (const [i, file] of weightFiles.entries()) {
-    let blob = weightBlobs[file.name];
-    if (!blob) {
-      let stage = 'net';
-      const onBytes = (loaded) => post({ type: 'dl', which: 'model', status: 'progress',
-                                         loaded: before + loaded, total, stage });
-      post({ type: 'phase', text: `가중치 ${i + 1}/${weightFiles.length} 준비 중…` });
-      const got = await weightBlob(file, onBytes);
-      blob = weightBlobs[file.name] = got.blob;
-      stage = got.stage;
-      post({ type: 'dl', which: 'model', status: 'progress', loaded: before + blob.size, total, stage });
+    post({ type: 'phase', text: `가중치 ${i + 1}/${weightFiles.length} 준비 중…` });
+    const got = await weightBlob(file, loaded => post({ type: 'dl', which: 'model', status: 'progress',
+      loaded: before + loaded, total, stage: 'net' }));
+    const blob = got.blob;
+    const expected = manifest.files.find(f => f.location === file.name);
+    if (!expected || blob.size < expected.minimumBytes || (file.size && blob.size !== file.size)) {
+      throw new Error(`가중치 크기 검증 실패: ${file.name}`);
     }
+    weightBlobs[file.name] = blob;
     before += blob.size;
-    const data = !buffered && typeof FileReaderSync === 'function'
-      ? new BlobFile(blob)
-      : new Uint8Array(await blob.arrayBuffer());
-    out.push({ path: file.name, data });
+    out.push({ path: file.name, data: runtimeMode === 'stock' ? new StockBlobFile(blob) : blob });
+    post({ type: 'dl', which: 'model', status: 'progress', loaded: before, total, stage: got.stage });
   }
+  if (manifest.files.some(f => !weightBlobs[f.location])) throw new Error('외부 데이터 파일 누락');
   post({ type: 'dl', which: 'model', status: 'done' });
   return out;
 }
@@ -252,19 +217,16 @@ async function pruneStaleCache() {
 }
 
 // ── 로드 ────────────────────────────────────────────────────────────────────
-// 시도 순서: 선호 device → WASM. 앞 것이 예외로 실패하면 다음으로 넘어간다.
-// 메모리 초과로 프로세스가 죽는 경우는 예외가 아니라 페이지 재시작이라 여기서 못 잡는다.
-// 그건 index.js 가 localStorage 표식으로 감지해 안내한다.
-const plan = (preferred) => preferred === 'wasm' ? ['wasm'] : [preferred, 'wasm'];
+// A failed WebGPU session is not retried in a heap that may retain allocations.
 
-async function load({ device: preferred }) {
+async function load({ device: preferred, stagingMiB = 16 }) {
+  if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
   env.useBrowserCache = true;   // 그래프(1 MB)·설정·토크나이저만 transformers.js 가 캐시한다. 가중치는 여기서.
   await pruneStaleCache();
 
   // COOP/COEP 가 없으면 SharedArrayBuffer 를 못 써서 ORT 가 어차피 싱글스레드로 떨어진다.
   try {
-    env.backends.onnx.wasm.numThreads =
-      self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1;
+    env.backends.onnx.wasm.numThreads = 1;
   } catch { /* ORT 백엔드가 아직 준비되지 않았으면 기본값을 쓴다 */ }
 
   const progress_callback = (p) => {
@@ -290,48 +252,64 @@ async function load({ device: preferred }) {
   ]);
   rouge1 = makeRouge1(tokenizer);
 
-  post({ type: 'phase', text: '가중치 목록 조회 중…' });
-  let externalData = await mountWeights({ buffered: false });
+  post({ type: 'phase', text: '그래프와 initializer 메타데이터 확인 중…' });
+  const manifestResponse = await fetch(new URL('../../model/initializers.json', import.meta.url));
+  if (!manifestResponse.ok) throw new Error('initializer manifest missing; run tools/inspect_initializers.py');
+  const manifest = await manifestResponse.json();
+  if (manifest.revision !== REVISION) throw new Error('Manifest/model revision mismatch');
+  const graphResponse = await baseFetch(resolveUrl(GRAPH));
+  if (!graphResponse.ok) throw new Error(`Graph HTTP ${graphResponse.status}`);
+  verifiedGraph = new Uint8Array(await graphResponse.arrayBuffer()); // graph only (~0.96 MB)
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', verifiedGraph)),
+    b => b.toString(16).padStart(2, '0')).join('');
+  if (hash !== manifest.graphSha256) throw new Error('Graph/initializer manifest SHA-256 mismatch');
+  console.info('[MODEL] graph loaded', { bytes: verifiedGraph.byteLength, sha256: hash });
+  // Ensure from_pretrained consumes the verified graph via env.fetch rather
+  // than bypassing it with a separately cached graph response.
+  env.useBrowserCache = false;
 
-  const opts = {
-    revision: REVISION,
-    subfolder: '',                   // 레포가 평면 구조다. 기본값 'onnx/' 로 찾으면 404.
-    dtype: 'fp32',
-    use_external_data_format: false, // 가중치는 위에서 직접 마운트한다. transformers.js 가 받게 두지 않는다.
-    progress_callback,
-  };
-  let lastErr = null;
-  for (const [i, dev] of plan(preferred).entries()) {
-    const label = dev === 'webgpu' ? 'WebGPU · fp32' : 'WASM · fp32';
-    if (i > 0) post({ type: 'fallback', why: String(lastErr?.message ?? lastErr), next: label, device: dev });
-    post({ type: 'phase', text: `그래프 내려받고 ORT 세션 생성 중… (${label})` });
-    try {
-      model = await AutoModelForCausalLM.from_pretrained(REPO, {
-        ...opts, device: dev, session_options: { externalData },
-      });
-    } catch (e) {
-      console.warn(`${label} 실패:`, e);
-      lastErr = e;
-      // BlobFile 경로 자체가 깨진 경우(ORT 가 외부 데이터를 못 읽음)만 옛 방식으로 한 번 더 시도한다.
-      // 그 밖의 실패(메모리·커널 미지원 등)는 다음 device 로 넘긴다.
-      if (/external data/i.test(String(e?.message ?? e)) && externalData.some((x) => x.data instanceof BlobFile)) {
-        post({ type: 'fallback', why: `Blob 마운트 실패 → 파일을 통째로 읽어 다시 시도: ${e?.message ?? e}`,
-               next: label, device: dev });
-        try {
-          externalData = await mountWeights({ buffered: true });
-          model = await AutoModelForCausalLM.from_pretrained(REPO, {
-            ...opts, device: dev, session_options: { externalData },
-          });
-        } catch (e2) { console.warn(`${label} (버퍼) 실패:`, e2); lastErr = e2; continue; }
-      } else {
-        continue;
+  const externalData = await mountWeights(manifest);
+  const tracked = await installGpuTracking(manifest.largestInitializerBytes, record => console.info('[GPU]', record));
+  const started = performance.now();
+  const loader = runtimeMode === 'stock' ? null : new SessionRangeLoader({
+    manifest, stagingMiB,
+    checkpoint: saveCheckpoint,
+    emit: record => {
+      console.info(`[${record.stage.startsWith('gpu') ? 'GPU' : record.stage.startsWith('wasm') ? 'WASM' :
+        record.stage.startsWith('cpu') ? 'CPU' : record.stage.startsWith('range') ? 'EXT' :
+        record.stage.startsWith('initializer') ? 'INIT' : 'SESSION'}]`, record);
+      if (record.stage === 'initializer-start' || record.stage === 'initializer-complete' || record.stage === 'device-lost') {
+        post({ type: 'diagnostic', record });
       }
-    }
-    device = dev;
-    post({ type: 'ready', device, dtype: 'fp32', rows: rows.length });
-    return;
+    },
+  });
+  if (loader) globalThis.__ortExternalTensorLoader = loader;
+  await saveCheckpoint({ stage: 'session-create', runtimeMode, stagingMiB });
+  let success = false;
+  try {
+    model = await AutoModelForCausalLM.from_pretrained(REPO, {
+      revision: REVISION, subfolder: '', dtype: 'fp32', device: 'webgpu',
+      use_external_data_format: false, progress_callback,
+      session_options: { externalData, graphOptimizationLevel: 'disabled',
+        executionProviders: ['webgpu'],
+        enableCpuMemArena: false, enableMemPattern: false },
+    });
+    success = true;
+  } finally {
+    tracked.restore();
+    const metrics = loader?.close(success) ?? null;
+    const result = { stage: success ? 'session-create-complete' : 'session-create-failed',
+      runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics,
+      gpuLedger: tracked.ledger, lastInitializer: loader?.last };
+    await saveCheckpoint(result);
+    post({ type: 'session-result', result });
+    // The sealed loader stays installed: a later weight read is an error.
+    externalData.length = 0;
+    weightBlobs = null;
+    verifiedGraph = null;
   }
-  throw lastErr;
+  device = 'webgpu';
+  post({ type: 'ready', device, dtype: 'fp32', rows: rows.length });
 }
 
 // ── 한 행 실행 ──────────────────────────────────────────────────────────────
@@ -441,3 +419,4 @@ self.onmessage = async (e) => {
     post({ type: 'fatal', error: String(err?.stack ?? err) });
   }
 };
+post({ type: 'worker-ready' });

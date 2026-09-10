@@ -1,0 +1,288 @@
+diff --git a/cmake/adjust_global_compile_flags.cmake b/cmake/adjust_global_compile_flags.cmake
+index 8e45924db4..8978853859 100644
+--- a/cmake/adjust_global_compile_flags.cmake
++++ b/cmake/adjust_global_compile_flags.cmake
+@@ -16,6 +16,9 @@ if (NOT MSVC AND NOT onnxruntime_ENABLE_BITCODE)
+ endif()
+ 
+ if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
++  if (onnxruntime_USE_WEBGPU)
++    add_compile_definitions(ORT_WASM_EXTERNAL_RANGES)
++  endif()
+   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s ALLOW_UNIMPLEMENTED_SYSCALLS=1 -s DEFAULT_TO_CXX=1")
+ 
+   # Enable LTO for release single-thread build
+diff --git a/js/web/lib/wasm/wasm-core-impl.ts b/js/web/lib/wasm/wasm-core-impl.ts
+index 18c536d8d9..f650241335 100644
+--- a/js/web/lib/wasm/wasm-core-impl.ts
++++ b/js/web/lib/wasm/wasm-core-impl.ts
+@@ -358,6 +358,12 @@ export const createSession = async (
+       const loadingPromises = [];
+       for (const file of options.externalData) {
+         const path = typeof file === 'string' ? file : file.path;
++        const source = typeof file === 'string' ? file : file.data;
++        if (typeof Blob !== 'undefined' && source instanceof Blob && wasm.ortRangeLoaderVersion === 1) {
++          wasm.mountExternalData(path, source);
++          continue;
++        }
++
+         loadingPromises.push(
+           loadFile(typeof file === 'string' ? file : file.data).then((data) => {
+             wasm.mountExternalData(path, data);
+diff --git a/js/web/lib/wasm/wasm-types.ts b/js/web/lib/wasm/wasm-types.ts
+index 842bcd0c24..d0f7298278 100644
+--- a/js/web/lib/wasm/wasm-types.ts
++++ b/js/web/lib/wasm/wasm-types.ts
+@@ -468,13 +468,15 @@ export interface OrtWasmModule
+ 
+   readonly PTR_SIZE: 4 | 8;
+ 
++  /** Versioned native WebGPU range-loading bridge, supported by Asyncify and JSPI builds. */
++  ortRangeLoaderVersion?: number;
+   /**
+    * Mount the external data file to an internal map, which will be used during session initialization.
+    *
+    * @param externalDataFilePath - specify the relative path of the external data file.
+    * @param externalDataFileData - specify the content data.
+    */
+-  mountExternalData(externalDataFilePath: string, externalDataFileData: Uint8Array): void;
++  mountExternalData(externalDataFilePath: string, externalDataFileData: Uint8Array | Blob): void;
+   /**
+    * Unmount all external data files from the internal map.
+    */
+diff --git a/onnxruntime/core/framework/external_data_loader.cc b/onnxruntime/core/framework/external_data_loader.cc
+index c577805e69..2b89da40de 100644
+--- a/onnxruntime/core/framework/external_data_loader.cc
++++ b/onnxruntime/core/framework/external_data_loader.cc
+@@ -21,65 +21,93 @@ common::Status IExternalDataLoader::LoadTensor([[maybe_unused]] const Env& env,
+ 
+ #if defined(__wasm__)
+ 
++// EM_ASYNC_JS is lowered by Emscripten for both Asyncify and JSPI. Native
++// WebGPU builds already enable one of these; no Promise crosses EM_ASM_INT.
++#if defined(ORT_WASM_EXTERNAL_RANGES)
++// clang-format off
++EM_ASYNC_JS(int, OrtLoadExternalRange,
++            (const char* path, double offset, double length, void* target, int load_type), {
++  if (!globalThis['__ortExternalTensorLoader']) return -1;
++  try {
++    await Module['ortLoadExternalRange'](
++      UTF8ToString(path >>> 0), offset, length, target >>> 0, load_type);
++    return 0;
++  } catch (error) {
++    console.error('[EXT] range loading failed', error);
++    return 4;
++  }
++});
++// clang-format on
++#endif
++
+ common::Status LoadWebAssemblyExternalData(const Env& env,
+                                            const std::filesystem::path& data_file_path,
+                                            FileOffsetType data_offset,
+                                            SafeInt<size_t> data_length,
+                                            ExternalDataLoadType load_type,
+                                            void* tensor_data) {
+-  auto err_code = EM_ASM_INT(({
+-                               // If available, "Module.MountedFiles" is a Map for all preloaded files.
+-                               if (typeof Module == 'undefined' || !Module.MountedFiles) {
+-                                 return 1;  // "Module.MountedFiles" is not available.
+-                               }
+-                               let fileName = UTF8ToString(Number($0 >>> 0));
+-                               if (fileName.startsWith('./')) {
+-                                 fileName = fileName.substring(2);
+-                               }
+-                               const fileData = Module.MountedFiles.get(fileName);
+-                               if (!fileData) {
+-                                 return 2;  // File not found in preloaded files.
+-                               }
+-                               const offset = Number($1 >>> 0);
+-                               const length = Number($2 >>> 0);
+-                               const dataIdOrBuffer = Number($3 >>> 0);
+-                               const loadType = $4;
++  int err_code = -1;
++#if defined(ORT_WASM_EXTERNAL_RANGES)
++  err_code = OrtLoadExternalRange(data_file_path.c_str(),
++                                  static_cast<double>(data_offset),
++                                  static_cast<double>(static_cast<size_t>(data_length)),
++                                  tensor_data, static_cast<int>(load_type));
++#endif
++  if (err_code == -1) {
++    err_code = EM_ASM_INT(({
++                            // If available, "Module.MountedFiles" is a Map for all preloaded files.
++                            if (typeof Module == 'undefined' || !Module.MountedFiles) {
++                              return 1;  // "Module.MountedFiles" is not available.
++                            }
++                            let fileName = UTF8ToString(Number($0 >>> 0));
++                            if (fileName.startsWith('./')) {
++                              fileName = fileName.substring(2);
++                            }
++                            const fileData = Module.MountedFiles.get(fileName);
++                            if (!fileData) {
++                              return 2;  // File not found in preloaded files.
++                            }
++                            const offset = Number($1 >>> 0);
++                            const length = Number($2 >>> 0);
++                            const dataIdOrBuffer = Number($3 >>> 0);
++                            const loadType = $4;
+ 
+-                               if (offset + length > fileData.byteLength) {
+-                                 return 3;  // Out of bounds.
+-                               }
++                            if (offset + length > fileData.byteLength) {
++                              return 3;  // Out of bounds.
++                            }
+ 
+-                               try {
+-                                 const data = fileData.subarray(offset, offset + length);
+-                                 switch (loadType) {
+-                                   case 0:
+-                                     // Load external data to CPU memory.
+-                                     // Copy the file data (fileData,offset,length) into WebAssembly memory
+-                                     // (HEAPU8,buffer,length).
+-                                     HEAPU8.set(data, dataIdOrBuffer);
+-                                     break;
+-                                   case 1:
+-                                     // Load external data to GPU.
+-                                     // TODO: use a unified interface for upload external buffer.
+-                                     if (Module.webgpuUploadExternalBuffer) {
+-                                       Module.webgpuUploadExternalBuffer(dataIdOrBuffer, data);
+-                                     } else {
+-                                       Module.jsepUploadExternalBuffer(dataIdOrBuffer, data);
+-                                     }
+-                                     break;
+-                                   default:
+-                                     return 4;  // Unknown error occurred in memory copy.
+-                                 }
+-                                 return 0;
+-                               } catch {
+-                                 return 4;
+-                               }
+-                             }),
+-                             data_file_path.c_str(),
+-                             static_cast<int32_t>(data_offset),
+-                             static_cast<int32_t>(data_length),
+-                             tensor_data,
+-                             static_cast<int32_t>(load_type));
++                            try {
++                              const data = fileData.subarray(offset, offset + length);
++                              switch (loadType) {
++                                case 0:
++                                  // Load external data to CPU memory.
++                                  // Copy the file data (fileData,offset,length) into WebAssembly memory
++                                  // (HEAPU8,buffer,length).
++                                  HEAPU8.set(data, dataIdOrBuffer);
++                                  break;
++                                case 1:
++                                  // Load external data to GPU.
++                                  // TODO: use a unified interface for upload external buffer.
++                                  if (Module.webgpuUploadExternalBuffer) {
++                                    Module.webgpuUploadExternalBuffer(dataIdOrBuffer, data);
++                                  } else {
++                                    Module.jsepUploadExternalBuffer(dataIdOrBuffer, data);
++                                  }
++                                  break;
++                                default:
++                                  return 4;  // Unknown error occurred in memory copy.
++                              }
++                              return 0;
++                            } catch {
++                              return 4;
++                            }
++                          }),
++                          data_file_path.c_str(),
++                          static_cast<int32_t>(data_offset),
++                          static_cast<int32_t>(data_length),
++                          tensor_data,
++                          static_cast<int32_t>(load_type));
++  }
+   const char* err_msg;
+   switch (err_code) {
+     case 0:
+diff --git a/onnxruntime/core/framework/session_state_utils.cc b/onnxruntime/core/framework/session_state_utils.cc
+index 254c520b4e..4898377b79 100644
+--- a/onnxruntime/core/framework/session_state_utils.cc
++++ b/onnxruntime/core/framework/session_state_utils.cc
+@@ -32,6 +32,24 @@
+ #include "core/framework/memory_info.h"
+ #endif
+ 
++#if defined(ORT_WASM_EXTERNAL_RANGES)
++#include <emscripten.h>
++// Persist metadata before AllocateTensor can create a large CPU/GPU allocation.
++// clang-format off
++EM_ASYNC_JS(int, OrtCheckpointExternalTensor, (const char* name, int is_cpu), {
++  const loader = globalThis['__ortExternalTensorLoader'];
++  if (!loader) return 0;
++  try {
++    await loader['beforeAllocate'](UTF8ToString(name >>> 0), !!is_cpu);
++    return 0;
++  } catch (error) {
++    console.error('[INIT] before allocation failed', error);
++    return 1;
++  }
++});
++// clang-format on
++#endif
++
+ namespace onnxruntime {
+ namespace session_state_utils {
+ 
+@@ -102,6 +120,10 @@ static common::Status DeserializeTensorProto(const Env& env, const std::basic_st
+   if (utils::HasExternalData(tensor_proto)) {
+     auto external_data_loader = external_data_loader_mgr.GetExternalDataLoader(memory_info);
+     if (external_data_loader) {
++#if defined(ORT_WASM_EXTERNAL_RANGES)
++      ORT_RETURN_IF(OrtCheckpointExternalTensor(tensor_proto.name().c_str(), device.Type() == OrtDevice::CPU),
++                    "External initializer pre-allocation check failed: ", tensor_proto.name());
++#endif
+       // if custom external data loader is used, always allocate memory on device
+       ORT_RETURN_IF_ERROR(AllocateTensor(memory_buffer, tensor, type, tensor_shape, use_device_allocator_for_initializers, alloc));
+       ORT_RETURN_IF_ERROR(utils::LoadExtDataToTensorFromTensorProto(env, proto_path, tensor_proto,
+diff --git a/onnxruntime/wasm/post-webgpu.js b/onnxruntime/wasm/post-webgpu.js
+index 146355f6a4..24e51f907c 100644
+--- a/onnxruntime/wasm/post-webgpu.js
++++ b/onnxruntime/wasm/post-webgpu.js
+@@ -208,6 +208,17 @@ Module["webgpuInit"] = (setDefaultDevice) => {
+     };
+   };
+ 
++  Module["ortGetExternalGpuTarget"] = (bufferHandle) => {
++    if (!webgpuCurrentDevice) {
++      const deviceHandle = _OrtGetWebGpuDevice(webgpuCurrentDeviceId);
++      webgpuCurrentDevice = WebGPU.getJsObject(deviceHandle);
++    }
++    return {
++      "buffer": WebGPU.getJsObject(bufferHandle),
++      "device": webgpuCurrentDevice,
++    };
++  };
++
+   // Setup a callback function for loading external buffers (model weights).
+   Module.webgpuUploadExternalBuffer = (bufferHandle, data) => {
+     const srcArrayBuffer = data.buffer;
+diff --git a/onnxruntime/wasm/pre.js b/onnxruntime/wasm/pre.js
+index f8a7fa0286..d8ba1cbb47 100644
+--- a/onnxruntime/wasm/pre.js
++++ b/onnxruntime/wasm/pre.js
+@@ -53,3 +53,20 @@ var SharedArrayBuffer =
+   // this is because prettier will remove the quotes around the property names, but we need to keep them
+   // because otherwise closure compiler may rename them and break the code.
+   new WebAssembly.Memory({ "initial": 0, "maximum": 0, "shared": true }).buffer.constructor;
++
++// Private, versioned bridge used by the pinned Didimdol runtime. Keep property
++// names quoted: the Emscripten closure pass must preserve the app-facing ABI.
++Module["ortRangeLoaderVersion"] = 1;
++Module["ortLoadExternalRange"] = async (path, offset, length, target, loadType) => {
++  const location = path.startsWith("./") ? path.substring(2) : path;
++  const file = Module.MountedFiles && Module.MountedFiles.get(location);
++  if (!file) throw new Error("External data file not mounted: " + location);
++  const loader = globalThis["__ortExternalTensorLoader"];
++  const gpu = loadType === 1 ? Module["ortGetExternalGpuTarget"](target) : undefined;
++  await loader["load"]({
++    "location": location, "file": file, "offset": offset, "length": length,
++    "target": target, "loadType": loadType, "gpu": gpu,
++    // Always acquire HEAPU8 after await: WebAssembly memory may have grown.
++    "getHeap": () => HEAPU8,
++  });
++};

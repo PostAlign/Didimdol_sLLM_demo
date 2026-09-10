@@ -83,3 +83,8 @@ runs/
 .DS_Store
 
 model/web
+.work/
+node_modules/
+web/vendor/
+test-results/
+model/experiments/

@@ -1,0 +1,7 @@
+onnx==1.22.0
+numpy==2.5.3
+cmake==4.4.3
+ninja==1.13.2
+flatbuffers==25.12.19
+packaging==26.3
+setuptools==84.0.0

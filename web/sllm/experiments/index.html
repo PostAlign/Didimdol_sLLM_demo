@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FP32 세션 생성 메모리 실험</title>
+<style>body{font:16px system-ui;max-width:1100px;margin:30px auto;padding:0 16px}input{width:95%;padding:8px}button{margin:12px 8px 12px 0;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}td,th{text-align:left;padding:8px;border-bottom:1px solid #ccc}table{width:100%}</style>
+<h1>FP32 세션 생성 메모리 실험</h1>
+<p>A–C: 기존 ORT + BlobFile, 파일 128/64/32 MiB. D–G: 수정 ORT, staging 64/32/16/8 MiB. 각 실험은 새 페이지에서 실행됩니다.</p>
+<label>실험 파일 목록 URL <input id="source" value="../../../model/experiments/experiments.json"></label>
+<button id="start">7개 실험 시작 / 이어하기</button><button id="export">JSON 저장</button><button id="reset">기록 초기화</button>
+<p id="status">준비</p><table><thead><tr><th>실험</th><th>결과</th><th>생성 시간</th><th>CPU staging peak</th><th>WASM heap peak</th><th>GPU weight</th></tr></thead><tbody id="rows"></tbody></table><pre id="last"></pre>
+<script type="module" src="./runner.js"></script></html>

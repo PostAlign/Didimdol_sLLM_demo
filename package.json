@@ -1,0 +1,17 @@
+{
+  "name": "didimdol-sllm-demo",
+  "private": true,
+  "scripts": {
+    "build": "node tools/build-runtime.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0",
+    "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.2",
+    "playwright": "1.58.2"
+  }
+}

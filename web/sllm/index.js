@@ -11,6 +11,7 @@
  */
 
 import { ms, mb, f3, esc, setBar, makeBadge } from '../ui.js';
+import { readCheckpoint } from './diagnostics.js';
 
 export function initSllm(root) {
   const $ = (s) => root.querySelector(s);
@@ -32,7 +33,8 @@ export function initSllm(root) {
                     || matchMedia('(display-mode: standalone)').matches;
 
   // iOS 에서 WASM 은 가중치를 wasm 힙에 통째로 올려야 해서(1.07 GB) 탭 메모리 한계에 걸린다.
-  // WebGPU 는 텐서를 GPU 프로세스로 바로 올려 그 사본이 없다.
+  // 수정한 WebGPU loader 는 외부 tensor 를 WASM staging 없이 GPU 에 올린다.
+  // GPU/Blob backing 의 실제 process 메모리 사용량은 실기기 계측 대상이다.
   // iOS 의 WebGPU 는 Safari 26 부터라, 그 아래는 시도하지 않고 안내 후 차단한다.
   function iosBlock() {
     const ua = navigator.userAgent;
@@ -83,8 +85,7 @@ export function initSllm(root) {
              why: adapter.info?.description || adapter.info?.vendor || 'GPU' };
   }
 
-  // WebGPU 가 안 되면 WASM 으로 내린다. 내려간 이유는 반드시 note 로 남긴다.
-  // 선택이 조용히 버려지면 원인을 찾을 수 없다.
+  // 기존 기기 판정 정보를 유지하되, 아래 부팅 단계에서 WebGPU 미지원은 차단한다.
   function resolvePlan(chosen) {
     if (chosen.device !== 'webgpu') return { device: 'wasm', note: chosen.why };
     if (chosen.limit >= NEED) return { device: 'webgpu' };
@@ -173,26 +174,33 @@ export function initSllm(root) {
   // 스마트폰은 탭 메모리 한계를 넘으면 렌더러/WebContent 프로세스를 죽이고 페이지를 조용히 다시 연다.
   // 콘솔도 오류도 남지 않아 "다운로드만 반복"처럼 보인다. 로드 시작 시 표식을 남기고
   // ready/fatal 에서 지우면, 표식이 남은 채 부팅된 경우 = 지난 시도가 도중에 끊긴 것이다.
-  // 예외로 잡히는 실패는 워커가 WASM 으로 넘어가지만, 프로세스 종료는 여기서만 잡을 수 있다.
+  // 예외로 잡히는 실패는 기록하고 종료한다. 미완료 표식만으로 OOM 을 확정하지 않는다.
   const ATTEMPT_KEY = 'didimdol.loadAttempt';
   const markAttempt = (device) => {
     try { localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ device, t: Date.now() })); } catch {}
   };
   const clearAttempt = () => { try { localStorage.removeItem(ATTEMPT_KEY); } catch {} };
-  function reportBrokenAttempt() {
+  async function reportBrokenAttempt() {
     let prev = null;
     try { prev = JSON.parse(localStorage.getItem(ATTEMPT_KEY) ?? 'null'); } catch {}
     if (!prev) return;
+    const checkpoint = await readCheckpoint();
+    console.warn('LAST CRASH POSITION (interrupted load; process kill is not proven)', checkpoint);
     clearAttempt();
     const when = new Date(prev.t).toLocaleTimeString('ko-KR');
     addRow(-1, null,
       `지난 시도(${when} · ${prev.device})가 모델 로드 도중 끝났습니다. 스마트폰은 탭 메모리 한계를 넘으면 `
       + `오류 없이 페이지가 다시 열립니다. 다른 탭을 닫고 다시 시도해 보세요. `
-      + `가중치는 파일 단위로 캐시되므로 이미 받은 부분은 다시 받지 않습니다.`);
+      + `가중치는 파일 단위로 캐시되므로 이미 받은 부분은 다시 받지 않습니다.`
+      + (checkpoint ? ` 마지막 기록: ${checkpoint.stage} · ${checkpoint.initializerName ?? ''}` : ''));
   }
 
   // ── 워커 ────────────────────────────────────────────────────────────────────
-  const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  const workerURL = new URL('./worker.js', import.meta.url);
+  const runtimeOptions = new URLSearchParams(location.search);
+  workerURL.searchParams.set('ortMode', runtimeOptions.get('ortMode') || 'asyncify');
+  const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 16);
+  const worker = new Worker(workerURL, { type: 'module' });
   let loaded = false, chosen = null, nRows = 100;
 
   // 모듈 import 실패 등 워커 스크립트 자체의 오류는 onmessage 로 오지 않는다.
@@ -207,6 +215,18 @@ export function initSllm(root) {
     switch (m.type) {
       case 'phase':    els.phase.textContent = m.text; break;
       case 'dl':       onDl(m); break;
+      case 'diagnostic':
+        if (m.record.stage === 'device-lost') {
+          els.phase.textContent = 'GPU 연결이 끊겼습니다. 페이지를 새로 열어 다시 시도해 주세요.';
+          els.start.disabled = true; els.stop.disabled = true;
+          worker.terminate();
+        } else {
+          els.phase.textContent = `가중치 업로드 ${m.record.metrics.loadedInitializerCount}개 완료 · ${m.record.initializerName}`;
+        }
+        break;
+      case 'session-result':
+        console.info('[SESSION] result', m.result);
+        break;
       case 'fallback':
         badge(`⚠ 실패 → ${m.next}`, 'cpu');
         addRow(-1, null, `이전 시도 실패, ${m.next} 로 다시 시도합니다: ${m.why}`);
@@ -239,7 +259,10 @@ export function initSllm(root) {
         els.phase.textContent = '오류';
         els.prep.hidden = true;
         addRow(-1, null, m.error);
-        els.start.disabled = false; els.stop.disabled = true;
+        // ORT may keep a failed WASM instance/allocator. Retry in a fresh page.
+        els.phase.textContent = '로드 실패 · 페이지를 새로 열어 다시 시도해 주세요.';
+        els.start.disabled = true; els.stop.disabled = true;
+        worker.terminate();
         break;
     }
   };
@@ -275,7 +298,7 @@ export function initSllm(root) {
       const p = resolvePlan(chosen);
       if (p.note) badge(`↓ ${p.note}`, 'cpu');
       markAttempt(p.device);
-      worker.postMessage({ type: 'load', device: p.device });
+      worker.postMessage({ type: 'load', device: p.device, stagingMiB });
     }
   };
   els.stop.onclick = () => {
@@ -294,7 +317,7 @@ export function initSllm(root) {
       return;
     }
     chosen = await pickDevice();
-    reportBrokenAttempt();
+    await reportBrokenAttempt();
     persistStorage();                             // 기다리지 않는다. 승인 여부가 로드를 막지 않는다.
     // iOS Safari 일반 탭은 7일간 상호작용이 없으면 캐시를 통째로 지운다. 홈 화면 앱은
     // 저장소가 분리되어 이 규칙에서 빠지므로, 홈 화면이 아닌 iOS 에서만 한 줄 안내한다.
@@ -302,6 +325,11 @@ export function initSllm(root) {
     if (chosen.device === 'webgpu') badge(`⚡ WebGPU · ${chosen.why}`, 'gpu');
     else                            badge(`🐢 WASM(CPU) · ${chosen.why}`, 'cpu');
     if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)} (텐서 최대 ${mb(NEED)} · 임베딩 16분할)`);
+    if (chosen.device !== 'webgpu' || chosen.limit < NEED) {
+      els.phase.textContent = '이 FP32 모델은 40 MiB 텐서를 지원하는 WebGPU가 필요합니다.';
+      els.start.disabled = true;
+      return;
+    }
     els.phase.textContent = '준비 완료';
     els.start.disabled = false;
   })();

@@ -1,0 +1,4836 @@
+{
+  "schemaVersion": 1,
+  "revision": "8c50d7686bb1b205c02d42bb4b64505483c41a2b",
+  "graphSha256": "bbbfa81fde1230c1b16566d27e3e21d1dede60ec9df74fc6847921e86e012c5a",
+  "graphBytes": 955651,
+  "totalInitializerBytes": 1072392840,
+  "totalExternalTensorBytes": 1072392704,
+  "largestInitializerBytes": 41943040,
+  "expectedGpuResidentBytes": 1072392704,
+  "expectedCpuStagingBytes": {
+    "8": {
+      "scratch": 8388608,
+      "streamChunkUpperBound": 8388608
+    },
+    "16": {
+      "scratch": 16777216,
+      "streamChunkUpperBound": 16777216
+    },
+    "32": {
+      "scratch": 33554432,
+      "streamChunkUpperBound": 33554432
+    },
+    "64": {
+      "scratch": 67108864,
+      "streamChunkUpperBound": 67108864
+    }
+  },
+  "files": [
+    {
+      "location": "model.onnx_data",
+      "minimumBytes": 133769728
+    },
+    {
+      "location": "model.onnx_data_1",
+      "minimumBytes": 133767168
+    },
+    {
+      "location": "model.onnx_data_2",
+      "minimumBytes": 133767168
+    },
+    {
+      "location": "model.onnx_data_3",
+      "minimumBytes": 125829120
+    },
+    {
+      "location": "model.onnx_data_4",
+      "minimumBytes": 125829120
+    },
+    {
+      "location": "model.onnx_data_5",
+      "minimumBytes": 125829120
+    },
+    {
+      "location": "model.onnx_data_6",
+      "minimumBytes": 125829120
+    },
+    {
+      "location": "model.onnx_data_7",
+      "minimumBytes": 125829120
+    },
+    {
+      "location": "model.onnx_data_8",
+      "minimumBytes": 41943040
+    }
+  ],
+  "initializers": [
+    {
+      "index": 0,
+      "name": "onnx::Mul_6814",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 0,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "onnx::MatMul_6815",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 2560,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 2,
+      "name": "onnx::MatMul_6822",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 2624000,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 3,
+      "name": "onnx::MatMul_6823",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 3279360,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 4,
+      "name": "onnx::Mul_6825",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 3934720,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 5,
+      "name": "onnx::Mul_6827",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 3935744,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 6,
+      "name": "onnx::MatMul_6850",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 3936768,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 7,
+      "name": "onnx::Mul_6852",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 6558208,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 8,
+      "name": "onnx::Mul_6854",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 6560768,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 9,
+      "name": "onnx::MatMul_6855",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 6563328,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 10,
+      "name": "onnx::MatMul_6856",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 11806208,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 11,
+      "name": "onnx::MatMul_6857",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 17049088,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 12,
+      "name": "onnx::Mul_6859",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 22291968,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.0/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 13,
+      "name": "onnx::Mul_6861",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 22294528,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 14,
+      "name": "onnx::MatMul_6862",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 22297088,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 15,
+      "name": "onnx::MatMul_6869",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 24918528,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 16,
+      "name": "onnx::MatMul_6870",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 25573888,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 17,
+      "name": "onnx::Mul_6872",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 26229248,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 18,
+      "name": "onnx::Mul_6874",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 26230272,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 19,
+      "name": "onnx::MatMul_6897",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 26231296,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 20,
+      "name": "onnx::Mul_6899",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 28852736,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 21,
+      "name": "onnx::Mul_6901",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 28855296,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 22,
+      "name": "onnx::MatMul_6902",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 28857856,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 23,
+      "name": "onnx::MatMul_6903",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 34100736,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 24,
+      "name": "onnx::MatMul_6904",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 39343616,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 25,
+      "name": "onnx::Mul_6906",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 44586496,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.1/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 26,
+      "name": "onnx::Mul_6908",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 44589056,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 27,
+      "name": "onnx::MatMul_6909",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 44591616,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 28,
+      "name": "onnx::MatMul_6916",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 47213056,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 29,
+      "name": "onnx::MatMul_6917",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 47868416,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 30,
+      "name": "onnx::Mul_6919",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 48523776,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 31,
+      "name": "onnx::Mul_6921",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 48524800,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 32,
+      "name": "onnx::MatMul_6944",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 48525824,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 33,
+      "name": "onnx::Mul_6946",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 51147264,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 34,
+      "name": "onnx::Mul_6948",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 51149824,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 35,
+      "name": "onnx::MatMul_6949",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 51152384,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 36,
+      "name": "onnx::MatMul_6950",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 56395264,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 37,
+      "name": "onnx::MatMul_6951",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 61638144,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 38,
+      "name": "onnx::Mul_6953",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 66881024,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.2/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 39,
+      "name": "onnx::Mul_6955",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 66883584,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 40,
+      "name": "onnx::MatMul_6956",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 66886144,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 41,
+      "name": "onnx::MatMul_6963",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 69507584,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 42,
+      "name": "onnx::MatMul_6964",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 70162944,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 43,
+      "name": "onnx::Mul_6966",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 70818304,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 44,
+      "name": "onnx::Mul_6968",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 70819328,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 45,
+      "name": "onnx::MatMul_6991",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 70820352,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 46,
+      "name": "onnx::Mul_6993",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 73441792,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 47,
+      "name": "onnx::Mul_6995",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 73444352,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 48,
+      "name": "onnx::MatMul_6996",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 73446912,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 49,
+      "name": "onnx::MatMul_6997",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 78689792,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 50,
+      "name": "onnx::MatMul_6998",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 83932672,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 51,
+      "name": "onnx::Mul_7000",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 89175552,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.3/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 52,
+      "name": "onnx::Mul_7002",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 89178112,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 53,
+      "name": "onnx::MatMul_7003",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 89180672,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 54,
+      "name": "onnx::MatMul_7010",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 91802112,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 55,
+      "name": "onnx::MatMul_7011",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 92457472,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 56,
+      "name": "onnx::Mul_7013",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 93112832,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 57,
+      "name": "onnx::Mul_7015",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 93113856,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 58,
+      "name": "onnx::MatMul_7038",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 93114880,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 59,
+      "name": "onnx::Mul_7040",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 95736320,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 60,
+      "name": "onnx::Mul_7042",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 95738880,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 61,
+      "name": "onnx::MatMul_7043",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 95741440,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 62,
+      "name": "onnx::MatMul_7044",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 100984320,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 63,
+      "name": "onnx::MatMul_7045",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 106227200,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 64,
+      "name": "onnx::Mul_7047",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 111470080,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.4/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 65,
+      "name": "onnx::Mul_7049",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 111472640,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 66,
+      "name": "onnx::MatMul_7050",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data",
+      "offset": 111475200,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 67,
+      "name": "onnx::MatMul_7057",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data",
+      "offset": 114096640,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 68,
+      "name": "onnx::MatMul_7058",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data",
+      "offset": 114752000,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 69,
+      "name": "onnx::Mul_7060",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 115407360,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 70,
+      "name": "onnx::Mul_7062",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 115408384,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 71,
+      "name": "onnx::MatMul_7085",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data",
+      "offset": 115409408,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 72,
+      "name": "onnx::Mul_7087",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 118030848,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 73,
+      "name": "onnx::Mul_7089",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 118033408,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 74,
+      "name": "onnx::MatMul_7090",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data",
+      "offset": 118035968,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 75,
+      "name": "onnx::MatMul_7091",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data",
+      "offset": 123278848,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 76,
+      "name": "onnx::MatMul_7092",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data",
+      "offset": 128521728,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 77,
+      "name": "onnx::Mul_7094",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 133764608,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.5/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 78,
+      "name": "onnx::Mul_7096",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data",
+      "offset": 133767168,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 79,
+      "name": "onnx::MatMul_7097",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 0,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 80,
+      "name": "onnx::MatMul_7104",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 2621440,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 81,
+      "name": "onnx::MatMul_7105",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 3276800,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 82,
+      "name": "onnx::Mul_7107",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 3932160,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 83,
+      "name": "onnx::Mul_7109",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 3933184,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 84,
+      "name": "onnx::MatMul_7132",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 3934208,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 85,
+      "name": "onnx::Mul_7134",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 6555648,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 86,
+      "name": "onnx::Mul_7136",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 6558208,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 87,
+      "name": "onnx::MatMul_7137",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 6560768,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 88,
+      "name": "onnx::MatMul_7138",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 11803648,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 89,
+      "name": "onnx::MatMul_7139",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 17046528,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 90,
+      "name": "onnx::Mul_7141",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 22289408,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.6/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 91,
+      "name": "onnx::Mul_7143",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 22291968,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 92,
+      "name": "onnx::MatMul_7144",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 22294528,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 93,
+      "name": "onnx::MatMul_7151",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 24915968,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 94,
+      "name": "onnx::MatMul_7152",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 25571328,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 95,
+      "name": "onnx::Mul_7154",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 26226688,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 96,
+      "name": "onnx::Mul_7156",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 26227712,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 97,
+      "name": "onnx::MatMul_7179",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 26228736,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 98,
+      "name": "onnx::Mul_7181",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 28850176,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 99,
+      "name": "onnx::Mul_7183",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 28852736,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 100,
+      "name": "onnx::MatMul_7184",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 28855296,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 101,
+      "name": "onnx::MatMul_7185",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 34098176,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 102,
+      "name": "onnx::MatMul_7186",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 39341056,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 103,
+      "name": "onnx::Mul_7188",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 44583936,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.7/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 104,
+      "name": "onnx::Mul_7190",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 44586496,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 105,
+      "name": "onnx::MatMul_7191",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 44589056,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 106,
+      "name": "onnx::MatMul_7198",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 47210496,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 107,
+      "name": "onnx::MatMul_7199",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 47865856,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 108,
+      "name": "onnx::Mul_7201",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 48521216,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 109,
+      "name": "onnx::Mul_7203",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 48522240,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 110,
+      "name": "onnx::MatMul_7226",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 48523264,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 111,
+      "name": "onnx::Mul_7228",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 51144704,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 112,
+      "name": "onnx::Mul_7230",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 51147264,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 113,
+      "name": "onnx::MatMul_7231",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 51149824,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 114,
+      "name": "onnx::MatMul_7232",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 56392704,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 115,
+      "name": "onnx::MatMul_7233",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 61635584,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 116,
+      "name": "onnx::Mul_7235",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 66878464,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.8/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 117,
+      "name": "onnx::Mul_7237",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 66881024,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 118,
+      "name": "onnx::MatMul_7238",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 66883584,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 119,
+      "name": "onnx::MatMul_7245",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 69505024,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 120,
+      "name": "onnx::MatMul_7246",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 70160384,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 121,
+      "name": "onnx::Mul_7248",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 70815744,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 122,
+      "name": "onnx::Mul_7250",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 70816768,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 123,
+      "name": "onnx::MatMul_7273",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 70817792,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 124,
+      "name": "onnx::Mul_7275",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 73439232,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 125,
+      "name": "onnx::Mul_7277",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 73441792,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 126,
+      "name": "onnx::MatMul_7278",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 73444352,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 127,
+      "name": "onnx::MatMul_7279",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 78687232,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 128,
+      "name": "onnx::MatMul_7280",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 83930112,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 129,
+      "name": "onnx::Mul_7282",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 89172992,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.9/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 130,
+      "name": "onnx::Mul_7284",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 89175552,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 131,
+      "name": "onnx::MatMul_7285",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 89178112,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 132,
+      "name": "onnx::MatMul_7292",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 91799552,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 133,
+      "name": "onnx::MatMul_7293",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 92454912,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 134,
+      "name": "onnx::Mul_7295",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 93110272,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 135,
+      "name": "onnx::Mul_7297",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 93111296,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 136,
+      "name": "onnx::MatMul_7320",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 93112320,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 137,
+      "name": "onnx::Mul_7322",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 95733760,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 138,
+      "name": "onnx::Mul_7324",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 95736320,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 139,
+      "name": "onnx::MatMul_7325",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 95738880,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 140,
+      "name": "onnx::MatMul_7326",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 100981760,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 141,
+      "name": "onnx::MatMul_7327",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 106224640,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 142,
+      "name": "onnx::Mul_7329",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 111467520,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.10/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 143,
+      "name": "onnx::Mul_7331",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 111470080,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 144,
+      "name": "onnx::MatMul_7332",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_1",
+      "offset": 111472640,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 145,
+      "name": "onnx::MatMul_7339",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_1",
+      "offset": 114094080,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 146,
+      "name": "onnx::MatMul_7340",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_1",
+      "offset": 114749440,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 147,
+      "name": "onnx::Mul_7342",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 115404800,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 148,
+      "name": "onnx::Mul_7344",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 115405824,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 149,
+      "name": "onnx::MatMul_7367",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_1",
+      "offset": 115406848,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 150,
+      "name": "onnx::Mul_7369",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 118028288,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 151,
+      "name": "onnx::Mul_7371",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 118030848,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 152,
+      "name": "onnx::MatMul_7372",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_1",
+      "offset": 118033408,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 153,
+      "name": "onnx::MatMul_7373",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_1",
+      "offset": 123276288,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 154,
+      "name": "onnx::MatMul_7374",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_1",
+      "offset": 128519168,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 155,
+      "name": "onnx::Mul_7376",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 133762048,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.11/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 156,
+      "name": "onnx::Mul_7378",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_1",
+      "offset": 133764608,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 157,
+      "name": "onnx::MatMul_7379",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 0,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 158,
+      "name": "onnx::MatMul_7386",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 2621440,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 159,
+      "name": "onnx::MatMul_7387",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 3276800,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 160,
+      "name": "onnx::Mul_7389",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 3932160,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 161,
+      "name": "onnx::Mul_7391",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 3933184,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 162,
+      "name": "onnx::MatMul_7414",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 3934208,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 163,
+      "name": "onnx::Mul_7416",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 6555648,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 164,
+      "name": "onnx::Mul_7418",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 6558208,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 165,
+      "name": "onnx::MatMul_7419",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 6560768,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 166,
+      "name": "onnx::MatMul_7420",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 11803648,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 167,
+      "name": "onnx::MatMul_7421",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 17046528,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 168,
+      "name": "onnx::Mul_7423",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 22289408,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.12/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 169,
+      "name": "onnx::Mul_7425",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 22291968,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 170,
+      "name": "onnx::MatMul_7426",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 22294528,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 171,
+      "name": "onnx::MatMul_7433",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 24915968,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 172,
+      "name": "onnx::MatMul_7434",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 25571328,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 173,
+      "name": "onnx::Mul_7436",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 26226688,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 174,
+      "name": "onnx::Mul_7438",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 26227712,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 175,
+      "name": "onnx::MatMul_7461",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 26228736,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 176,
+      "name": "onnx::Mul_7463",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 28850176,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 177,
+      "name": "onnx::Mul_7465",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 28852736,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 178,
+      "name": "onnx::MatMul_7466",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 28855296,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 179,
+      "name": "onnx::MatMul_7467",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 34098176,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 180,
+      "name": "onnx::MatMul_7468",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 39341056,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 181,
+      "name": "onnx::Mul_7470",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 44583936,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.13/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 182,
+      "name": "onnx::Mul_7472",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 44586496,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 183,
+      "name": "onnx::MatMul_7473",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 44589056,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 184,
+      "name": "onnx::MatMul_7480",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 47210496,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 185,
+      "name": "onnx::MatMul_7481",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 47865856,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 186,
+      "name": "onnx::Mul_7483",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 48521216,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 187,
+      "name": "onnx::Mul_7485",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 48522240,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 188,
+      "name": "onnx::MatMul_7508",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 48523264,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 189,
+      "name": "onnx::Mul_7510",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 51144704,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 190,
+      "name": "onnx::Mul_7512",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 51147264,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 191,
+      "name": "onnx::MatMul_7513",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 51149824,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 192,
+      "name": "onnx::MatMul_7514",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 56392704,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 193,
+      "name": "onnx::MatMul_7515",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 61635584,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 194,
+      "name": "onnx::Mul_7517",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 66878464,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.14/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 195,
+      "name": "onnx::Mul_7519",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 66881024,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 196,
+      "name": "onnx::MatMul_7520",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 66883584,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 197,
+      "name": "onnx::MatMul_7527",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 69505024,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 198,
+      "name": "onnx::MatMul_7528",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 70160384,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 199,
+      "name": "onnx::Mul_7530",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 70815744,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 200,
+      "name": "onnx::Mul_7532",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 70816768,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 201,
+      "name": "onnx::MatMul_7555",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 70817792,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 202,
+      "name": "onnx::Mul_7557",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 73439232,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 203,
+      "name": "onnx::Mul_7559",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 73441792,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 204,
+      "name": "onnx::MatMul_7560",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 73444352,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 205,
+      "name": "onnx::MatMul_7561",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 78687232,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 206,
+      "name": "onnx::MatMul_7562",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 83930112,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 207,
+      "name": "onnx::Mul_7564",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 89172992,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.15/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 208,
+      "name": "onnx::Mul_7566",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 89175552,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 209,
+      "name": "onnx::MatMul_7567",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 89178112,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 210,
+      "name": "onnx::MatMul_7574",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 91799552,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 211,
+      "name": "onnx::MatMul_7575",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 92454912,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 212,
+      "name": "onnx::Mul_7577",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 93110272,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 213,
+      "name": "onnx::Mul_7579",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 93111296,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 214,
+      "name": "onnx::MatMul_7602",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 93112320,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 215,
+      "name": "onnx::Mul_7604",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 95733760,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 216,
+      "name": "onnx::Mul_7606",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 95736320,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 217,
+      "name": "onnx::MatMul_7607",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 95738880,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 218,
+      "name": "onnx::MatMul_7608",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 100981760,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 219,
+      "name": "onnx::MatMul_7609",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 106224640,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 220,
+      "name": "onnx::Mul_7611",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 111467520,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.16/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 221,
+      "name": "onnx::Mul_7613",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 111470080,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/input_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 222,
+      "name": "onnx::MatMul_7614",
+      "shape": [
+        640,
+        1024
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_q",
+      "location": "model.onnx_data_2",
+      "offset": 111472640,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/q_proj/MatMul"
+      ]
+    },
+    {
+      "index": 223,
+      "name": "onnx::MatMul_7621",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_k",
+      "location": "model.onnx_data_2",
+      "offset": 114094080,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/k_proj/MatMul"
+      ]
+    },
+    {
+      "index": 224,
+      "name": "onnx::MatMul_7622",
+      "shape": [
+        640,
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 655360,
+      "category": "attention_v",
+      "location": "model.onnx_data_2",
+      "offset": 114749440,
+      "length": 655360,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/v_proj/MatMul"
+      ]
+    },
+    {
+      "index": 225,
+      "name": "onnx::Mul_7624",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 115404800,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/q_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 226,
+      "name": "onnx::Mul_7626",
+      "shape": [
+        256
+      ],
+      "dtype": "FLOAT",
+      "bytes": 1024,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 115405824,
+      "length": 1024,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/k_norm/Mul_1"
+      ]
+    },
+    {
+      "index": 227,
+      "name": "onnx::MatMul_7649",
+      "shape": [
+        1024,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2621440,
+      "category": "attention_o",
+      "location": "model.onnx_data_2",
+      "offset": 115406848,
+      "length": 2621440,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/self_attn/o_proj/MatMul"
+      ]
+    },
+    {
+      "index": 228,
+      "name": "onnx::Mul_7651",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 118028288,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/post_attention_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 229,
+      "name": "onnx::Mul_7653",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 118030848,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/pre_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 230,
+      "name": "onnx::MatMul_7654",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_gate",
+      "location": "model.onnx_data_2",
+      "offset": 118033408,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/mlp/gate_proj/MatMul"
+      ]
+    },
+    {
+      "index": 231,
+      "name": "onnx::MatMul_7655",
+      "shape": [
+        640,
+        2048
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_up",
+      "location": "model.onnx_data_2",
+      "offset": 123276288,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/mlp/up_proj/MatMul"
+      ]
+    },
+    {
+      "index": 232,
+      "name": "onnx::MatMul_7656",
+      "shape": [
+        2048,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 5242880,
+      "category": "mlp_down",
+      "location": "model.onnx_data_2",
+      "offset": 128519168,
+      "length": 5242880,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/mlp/down_proj/MatMul"
+      ]
+    },
+    {
+      "index": 233,
+      "name": "onnx::Mul_7658",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 133762048,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/layers.17/post_feedforward_layernorm/Mul_1"
+      ]
+    },
+    {
+      "index": 234,
+      "name": "onnx::Mul_7660",
+      "shape": [
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 2560,
+      "category": "rmsnorm",
+      "location": "model.onnx_data_2",
+      "offset": 133764608,
+      "length": 2560,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/norm/Mul_1"
+      ]
+    },
+    {
+      "index": 235,
+      "name": "embed_tokens.chunk0",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_3",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather0",
+        "/lm_head/split/Gemm0"
+      ]
+    },
+    {
+      "index": 236,
+      "name": "embed_tokens.chunk1",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_3",
+      "offset": 41943040,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather1",
+        "/lm_head/split/Gemm1"
+      ]
+    },
+    {
+      "index": 237,
+      "name": "embed_tokens.chunk2",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_3",
+      "offset": 83886080,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather2",
+        "/lm_head/split/Gemm2"
+      ]
+    },
+    {
+      "index": 238,
+      "name": "embed_tokens.chunk3",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_4",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather3",
+        "/lm_head/split/Gemm3"
+      ]
+    },
+    {
+      "index": 239,
+      "name": "embed_tokens.chunk4",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_4",
+      "offset": 41943040,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather4",
+        "/lm_head/split/Gemm4"
+      ]
+    },
+    {
+      "index": 240,
+      "name": "embed_tokens.chunk5",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_4",
+      "offset": 83886080,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather5",
+        "/lm_head/split/Gemm5"
+      ]
+    },
+    {
+      "index": 241,
+      "name": "embed_tokens.chunk6",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_5",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather6",
+        "/lm_head/split/Gemm6"
+      ]
+    },
+    {
+      "index": 242,
+      "name": "embed_tokens.chunk7",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_5",
+      "offset": 41943040,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather7",
+        "/lm_head/split/Gemm7"
+      ]
+    },
+    {
+      "index": 243,
+      "name": "embed_tokens.chunk8",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_5",
+      "offset": 83886080,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather8",
+        "/lm_head/split/Gemm8"
+      ]
+    },
+    {
+      "index": 244,
+      "name": "embed_tokens.chunk9",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_6",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather9",
+        "/lm_head/split/Gemm9"
+      ]
+    },
+    {
+      "index": 245,
+      "name": "embed_tokens.chunk10",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_6",
+      "offset": 41943040,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather10",
+        "/lm_head/split/Gemm10"
+      ]
+    },
+    {
+      "index": 246,
+      "name": "embed_tokens.chunk11",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_6",
+      "offset": 83886080,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather11",
+        "/lm_head/split/Gemm11"
+      ]
+    },
+    {
+      "index": 247,
+      "name": "embed_tokens.chunk12",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_7",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather12",
+        "/lm_head/split/Gemm12"
+      ]
+    },
+    {
+      "index": 248,
+      "name": "embed_tokens.chunk13",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_7",
+      "offset": 41943040,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather13",
+        "/lm_head/split/Gemm13"
+      ]
+    },
+    {
+      "index": 249,
+      "name": "embed_tokens.chunk14",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_7",
+      "offset": 83886080,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather14",
+        "/lm_head/split/Gemm14"
+      ]
+    },
+    {
+      "index": 250,
+      "name": "embed_tokens.chunk15",
+      "shape": [
+        16384,
+        640
+      ],
+      "dtype": "FLOAT",
+      "bytes": 41943040,
+      "category": "token_embedding/tied_lm_head",
+      "location": "model.onnx_data_8",
+      "offset": 0,
+      "length": 41943040,
+      "declaredLength": 0,
+      "consumers": [
+        "/model/embed_tokens/split/Gather15",
+        "/lm_head/split/Gemm15"
+      ]
+    },
+    {
+      "index": 251,
+      "name": "embed_tokens.rows",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Div",
+        "/model/embed_tokens/split/Mul"
+      ]
+    },
+    {
+      "index": 252,
+      "name": "embed_tokens.unsq_axes",
+      "shape": [
+        1
+      ],
+      "dtype": "INT64",
+      "bytes": 8,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Unsqueeze"
+      ]
+    },
+    {
+      "index": 253,
+      "name": "lm_head.last_starts",
+      "shape": [
+        1
+      ],
+      "dtype": "INT64",
+      "bytes": 8,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/lm_head/split/Slice"
+      ]
+    },
+    {
+      "index": 254,
+      "name": "lm_head.last_ends",
+      "shape": [
+        1
+      ],
+      "dtype": "INT64",
+      "bytes": 8,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/lm_head/split/Slice"
+      ]
+    },
+    {
+      "index": 255,
+      "name": "lm_head.last_axes",
+      "shape": [
+        1
+      ],
+      "dtype": "INT64",
+      "bytes": 8,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/lm_head/split/Slice"
+      ]
+    },
+    {
+      "index": 256,
+      "name": "lm_head.flat_shape",
+      "shape": [
+        2
+      ],
+      "dtype": "INT64",
+      "bytes": 16,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/lm_head/split/Reshape"
+      ]
+    },
+    {
+      "index": 257,
+      "name": "lm_head.logits_shape",
+      "shape": [
+        3
+      ],
+      "dtype": "INT64",
+      "bytes": 24,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/lm_head/split/Reshape_out"
+      ]
+    },
+    {
+      "index": 258,
+      "name": "embed_tokens.k1",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal1"
+      ]
+    },
+    {
+      "index": 259,
+      "name": "embed_tokens.k2",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal2"
+      ]
+    },
+    {
+      "index": 260,
+      "name": "embed_tokens.k3",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal3"
+      ]
+    },
+    {
+      "index": 261,
+      "name": "embed_tokens.k4",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal4"
+      ]
+    },
+    {
+      "index": 262,
+      "name": "embed_tokens.k5",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal5"
+      ]
+    },
+    {
+      "index": 263,
+      "name": "embed_tokens.k6",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal6"
+      ]
+    },
+    {
+      "index": 264,
+      "name": "embed_tokens.k7",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal7"
+      ]
+    },
+    {
+      "index": 265,
+      "name": "embed_tokens.k8",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal8"
+      ]
+    },
+    {
+      "index": 266,
+      "name": "embed_tokens.k9",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal9"
+      ]
+    },
+    {
+      "index": 267,
+      "name": "embed_tokens.k10",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal10"
+      ]
+    },
+    {
+      "index": 268,
+      "name": "embed_tokens.k11",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal11"
+      ]
+    },
+    {
+      "index": 269,
+      "name": "embed_tokens.k12",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal12"
+      ]
+    },
+    {
+      "index": 270,
+      "name": "embed_tokens.k13",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal13"
+      ]
+    },
+    {
+      "index": 271,
+      "name": "embed_tokens.k14",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal14"
+      ]
+    },
+    {
+      "index": 272,
+      "name": "embed_tokens.k15",
+      "shape": [],
+      "dtype": "INT32",
+      "bytes": 4,
+      "category": "other_constants",
+      "location": null,
+      "offset": 0,
+      "length": null,
+      "declaredLength": null,
+      "consumers": [
+        "/model/embed_tokens/split/Equal15"
+      ]
+    }
+  ]
+}
