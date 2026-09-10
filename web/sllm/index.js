@@ -4,6 +4,10 @@
  * initSllm(root) 는 #tab-sllm 패널 루트를 받아 그 안에서만 DOM 을 찾는다. 셸(app.js)이나
  * 다른 탭의 요소는 건드리지 않는다. iOS 차단 안내(#blocker)도 이 패널 안의 카드다 —
  * WebGPU 가 필요한 건 이 탭뿐이라 페이지 전체를 막을 이유가 없다.
+ *
+ * 정밀도는 fp32 하나다. fp16 은 품질이 평가 기준이 못 되어 폐기했다. 스마트폰에서도 fp32 가
+ * 올라가도록 모델 쪽(임베딩 분할 · 마지막 토큰 로짓 · 파일 분할)과 워커 쪽(파일 단위 캐시 ·
+ * Blob 마운트)을 손봤다. 자세한 건 build_web_models.py 와 worker.js 머리말.
  */
 
 import { ms, mb, f3, esc, setBar, makeBadge } from '../ui.js';
@@ -13,7 +17,6 @@ export function initSllm(root) {
   const els = {
     body: $('#sllmBody'), blocker: $('#blocker'), blockWhy: $('#blockWhy'), badges: $('#badges'),
     start: $('#start'), stop: $('#stop'), phase: $('#phase'), homeHint: $('#homeHint'),
-    dtype: $('#dtype'),
     avg: $('#avg'), prep: $('#prep'), runbar: $('#runbar'), rows: $('#rows'),
   };
   const bars = {
@@ -24,14 +27,12 @@ export function initSllm(root) {
   // ── iOS 게이트 ──────────────────────────────────────────────────────────────
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
              || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-  // 디버그: ?ios=1 이면 데스크톱에서도 iOS 의 가중치 로드 경로(스트리밍 캐시)를 태운다. 차단 판정에는 영향 없다.
-  const iosLoadPath = isIOS || new URLSearchParams(location.search).get('ios') === '1';
   // 홈 화면에서 실행 중인지. iOS 는 navigator.standalone, 그 외는 display-mode 로 판정한다.
   const isStandalone = navigator.standalone === true
                     || matchMedia('(display-mode: standalone)').matches;
 
-  // iOS 에서 WASM 은 가중치를 wasm 힙에 한 벌 더 복사해 fp32 는 물론 fp16 도 탭 메모리 한계에
-  // 걸린다. WebGPU 는 텐서를 GPU 프로세스로 바로 올려 그 사본이 없다.
+  // iOS 에서 WASM 은 가중치를 wasm 힙에 통째로 올려야 해서(1.07 GB) 탭 메모리 한계에 걸린다.
+  // WebGPU 는 텐서를 GPU 프로세스로 바로 올려 그 사본이 없다.
   // iOS 의 WebGPU 는 Safari 26 부터라, 그 아래는 시도하지 않고 안내 후 차단한다.
   function iosBlock() {
     const ua = navigator.userAgent;
@@ -46,7 +47,7 @@ export function initSllm(root) {
   }
 
   // ── 저장소 영구화 ───────────────────────────────────────────────────────────
-  // 내려받은 model.onnx (1 GB) 는 transformers.js 가 Cache API 에 넣어 재방문 때 다시 쓴다.
+  // 내려받은 가중치(1 GB, 파일 여러 개)는 워커가 Cache API 에 넣어 재방문 때 다시 쓴다.
   // Cache API 는 기본이 best-effort 라 디스크가 부족하면 브라우저가 지울 수 있다.
   // persist() 가 승인되면 그 삭제 대상에서 빠진다. persist() 는 Window 전용이라
   // 워커가 아니라 여기서 부른다. 결과는 흐름에 영향 없고 콘솔에만 남긴다.
@@ -64,10 +65,11 @@ export function initSllm(root) {
   }
 
   // ── 백엔드 판정 ─────────────────────────────────────────────────────────────
-  // tied embedding 이 [262144, 640] 짜리 단일 텐서다 (fp32 671 MB · fp16 335 MB). WebGPU 에서는
-  // 이게 스토리지 버퍼 하나로 바인딩되므로, 어댑터 한계가 이보다 작으면 가중치를
-  // 다 받은 뒤 세션 생성에서 터진다. 받기 전에 미리 확인한다.
-  const NEED = (dtype) => 262144 * 640 * (dtype === 'fp16' ? 2 : 4);
+  // WebGPU 는 텐서 하나가 스토리지 버퍼 하나라, 가장 큰 텐서가 어댑터 한계 안에 들어와야 한다.
+  // 원본은 tied embedding [262144, 640] 한 덩어리(671 MB)라 스마트폰 GPU(한계 128 MiB)에서 막혔다.
+  // build_web_models.py 가 이걸 CHUNK_ROWS=16384 행 청크로 나눠 두었으므로 가장 큰 텐서는
+  // 16384 × 640 × 4 B = 41.9 MB 다. 그래도 넘는 어댑터는 사실상 없지만 받기 전에 확인한다.
+  const NEED = 16384 * 640 * 4;
 
   async function pickDevice() {
     if (!navigator.gpu) return { device: 'wasm', why: 'WebGPU 미지원 브라우저' };
@@ -77,51 +79,16 @@ export function initSllm(root) {
     if (!adapter) return { device: 'wasm', why: 'GPU 어댑터 없음' };
 
     const { maxStorageBufferBindingSize: b, maxBufferSize: m } = adapter.limits;
-    const limit = Math.min(b, m);
-    // transformers.js 는 fp16 세션을 만들기 직전에 adapter.features.has('shader-f16') 를 보고,
-    // 없으면 "The device (webgpu) does not support fp16." 로 던진다. 버퍼 한계만 보고 fp16 을
-    // 계획하면 이 예외를 맞고 워커의 다음 시도(WASM · fp32)로 밀려난다 — 사용자 눈에는
-    // "fp16 을 골랐는데 fp32 로 받는다"로 보인다. 그래서 여기서 미리 확인한다.
-    const f16 = adapter.features.has('shader-f16');
-    return { device: 'webgpu', limit, f16,
+    return { device: 'webgpu', limit: Math.min(b, m),
              why: adapter.info?.description || adapter.info?.vendor || 'GPU' };
   }
 
-  // fp16 을 실제로 돌릴 수 있는가. 셋 다 만족해야 한다. 못 쓰면 그 사유를 문자열로 돌려준다.
-  //   WebGPU 어댑터가 있고 · shader-f16 을 갖고 있고 · 임베딩 텐서가 버퍼 한계 안에 들어온다
-  // WASM 은 fp16 커널이 드물어 애초에 시도하지 않으므로 여기서 함께 막는다.
-  function fp16Blocked(chosen) {
-    if (chosen.device !== 'webgpu') return chosen.why;
-    if (!chosen.f16) return 'GPU 어댑터가 shader-f16 미지원';
-    if (chosen.limit < NEED('fp16')) {
-      return `GPU 버퍼 한계 ${mb(chosen.limit)} < fp16 필요량 ${mb(NEED('fp16'))}`;
-    }
-    return null;
-  }
-
-  // 고른 dtype 이 안 되면 한 단계 내린다: fp32 → fp16 → WASM(fp32).
-  // 내려간 이유는 반드시 note 로 남긴다. 선택이 조용히 버려지면 원인을 찾을 수 없다.
-  function resolvePlan(chosen, dtype) {
-    const noF16 = fp16Blocked(chosen);
-    const toWasm = (why) => ({ device: 'wasm', dtype: 'fp32', note: why });
-
-    if (dtype === 'fp16') {
-      return noF16 ? toWasm(`fp16 사용 불가(${noF16}) → WASM · fp32`) : { device: 'webgpu', dtype: 'fp16' };
-    }
-    // fp32
-    if (chosen.device !== 'webgpu') return toWasm(chosen.why);
-    if (chosen.limit >= NEED('fp32')) return { device: 'webgpu', dtype: 'fp32' };
-    const over = `GPU 버퍼 한계 ${mb(chosen.limit)} < fp32 필요량 ${mb(NEED('fp32'))}`;
-    if (!noF16) return { device: 'webgpu', dtype: 'fp16', note: `${over} → fp16` };
-    return toWasm(`${over} · fp16 도 사용 불가(${noF16}) → WASM`);
-  }
-
-  // dtype 선택은 새로고침 뒤에도 남긴다. 실패로 fp16 에 내려간 뒤에도 그 선택이 유지되게.
-  const DTYPE_KEY = 'didimdol.dtype';
-  const getDtype = () => els.dtype.value;
-  function setDtype(v, persist = true) {
-    els.dtype.value = v;
-    if (persist) { try { localStorage.setItem(DTYPE_KEY, v); } catch {} }
+  // WebGPU 가 안 되면 WASM 으로 내린다. 내려간 이유는 반드시 note 로 남긴다.
+  // 선택이 조용히 버려지면 원인을 찾을 수 없다.
+  function resolvePlan(chosen) {
+    if (chosen.device !== 'webgpu') return { device: 'wasm', note: chosen.why };
+    if (chosen.limit >= NEED) return { device: 'webgpu' };
+    return { device: 'wasm', note: `GPU 버퍼 한계 ${mb(chosen.limit)} < 텐서 최대 ${mb(NEED)} → WASM` };
   }
 
   // ── 진행바 (rAF 스로틀) ─────────────────────────────────────────────────────
@@ -134,8 +101,8 @@ export function initSllm(root) {
 
   function onDl({ which, status, loaded, total, stage }) {
     const d = dl[which];
-    if (!d) return;                                   // 그래프 파일(수 MB) 등은 표시하지 않는다
-    if (status === 'reset') {                         // 다음 dtype 시도 → 바를 처음부터
+    if (!d) return;                                   // 그래프 파일(1 MB) 등은 표시하지 않는다
+    if (status === 'reset') {                         // 다음 시도 → 바를 처음부터
       Object.assign(d, { seen: false, done: false, loaded: 0, total: 0, markT: 0, markL: 0, bps: 0, stage: undefined });
       dirty = true; return;
     }
@@ -203,34 +170,25 @@ export function initSllm(root) {
   }
 
   // ── 로드 도중 프로세스 종료 감지 ────────────────────────────────────────────
-  // iOS 는 탭 메모리 한계를 넘으면 WebContent 프로세스를 죽이고 페이지를 조용히 다시 연다.
+  // 스마트폰은 탭 메모리 한계를 넘으면 렌더러/WebContent 프로세스를 죽이고 페이지를 조용히 다시 연다.
   // 콘솔도 오류도 남지 않아 "다운로드만 반복"처럼 보인다. 로드 시작 시 표식을 남기고
   // ready/fatal 에서 지우면, 표식이 남은 채 부팅된 경우 = 지난 시도가 도중에 끊긴 것이다.
-  // 예외로 잡히는 실패는 워커가 다음 dtype 으로 넘어가지만, 프로세스 종료는 여기서만 잡을 수 있다.
-  // fp32 로 죽었으면 다음 시도의 dtype 을 fp16 으로 내려 둔다 — "fp32 로 하고, 안 되면 fp16".
+  // 예외로 잡히는 실패는 워커가 WASM 으로 넘어가지만, 프로세스 종료는 여기서만 잡을 수 있다.
   const ATTEMPT_KEY = 'didimdol.loadAttempt';
-  const markAttempt = (device, dtype) => {
-    try { localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ device, dtype, t: Date.now() })); } catch {}
+  const markAttempt = (device) => {
+    try { localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ device, t: Date.now() })); } catch {}
   };
   const clearAttempt = () => { try { localStorage.removeItem(ATTEMPT_KEY); } catch {} };
-  function reportBrokenAttempt(noF16) {
+  function reportBrokenAttempt() {
     let prev = null;
     try { prev = JSON.parse(localStorage.getItem(ATTEMPT_KEY) ?? 'null'); } catch {}
     if (!prev) return;
     clearAttempt();
     const when = new Date(prev.t).toLocaleTimeString('ko-KR');
-    let msg = `지난 시도(${when} · ${prev.device} · ${prev.dtype})가 모델 로드 도중 끝났습니다. `
-      + `iOS 에서는 탭 메모리 한계(약 2 GB)를 넘으면 오류 없이 페이지가 다시 열립니다.`;
-    if (prev.dtype !== 'fp32') {
-      msg += ' fp16 도 넘는다면 이 기기에서는 실행할 수 없습니다.';
-    } else if (noF16) {
-      // 여기서 fp16 으로 내려 봤자 워커가 다시 fp32 로 되돌린다. 그럴 바엔 사실대로 말한다.
-      msg += ` 이 기기는 fp16 을 쓸 수 없어(${noF16}) 정밀도를 더 낮출 수 없습니다.`;
-    } else {
-      setDtype('fp16');
-      msg += ' 다음 시도는 fp16 으로 바꿔 두었습니다. 원하면 위에서 fp32 로 되돌릴 수 있습니다.';
-    }
-    addRow(-1, null, msg);
+    addRow(-1, null,
+      `지난 시도(${when} · ${prev.device})가 모델 로드 도중 끝났습니다. 스마트폰은 탭 메모리 한계를 넘으면 `
+      + `오류 없이 페이지가 다시 열립니다. 다른 탭을 닫고 다시 시도해 보세요. `
+      + `가중치는 파일 단위로 캐시되므로 이미 받은 부분은 다시 받지 않습니다.`);
   }
 
   // ── 워커 ────────────────────────────────────────────────────────────────────
@@ -249,19 +207,15 @@ export function initSllm(root) {
     switch (m.type) {
       case 'phase':    els.phase.textContent = m.text; break;
       case 'dl':       onDl(m); break;
-      case 'skip':
-        badge(`⚠ ${m.dtype} 파일 없음 → 건너뜀`, 'cpu');
-        addRow(-1, null, m.why);
-        break;
       case 'fallback':
         badge(`⚠ 실패 → ${m.next}`, 'cpu');
         addRow(-1, null, `이전 시도 실패, ${m.next} 로 다시 시도합니다: ${m.why}`);
-        markAttempt(m.device, m.dtype);
+        markAttempt(m.device);
         console.warn('fallback:', m.why);
         break;
       case 'ready':
         clearAttempt();
-        badge(`${m.device === 'webgpu' ? '⚡ WebGPU' : '🐢 WASM(CPU)'} · ${m.dtype} 로 실행 중`,
+        badge(`${m.device === 'webgpu' ? '⚡ WebGPU' : '🐢 WASM(CPU)'} · fp32 로 실행 중`,
               m.device === 'webgpu' ? 'gpu' : 'cpu');
         loaded = true; nRows = m.rows;
         els.prep.hidden = true;
@@ -286,7 +240,6 @@ export function initSllm(root) {
         els.prep.hidden = true;
         addRow(-1, null, m.error);
         els.start.disabled = false; els.stop.disabled = true;
-        if (!loaded) els.dtype.disabled = false;   // 로드 자체가 실패했으면 정밀도를 바꿔 재시도할 수 있어야 한다
         break;
     }
   };
@@ -313,22 +266,18 @@ export function initSllm(root) {
     els.avg.hidden = true;                        // 시작하면 평균은 즉시 다시 숨긴다
     els.rows.replaceChildren();
     els.start.disabled = true; els.stop.disabled = false;
-    els.dtype.disabled = true;                    // 로드된 모델은 바꿀 수 없다. 바꾸려면 새로고침.
     if (loaded) {
       els.runbar.hidden = false;
       setBar(bars.run, 0, `0 / ${nRows}`);
       worker.postMessage({ type: 'run' });
     } else {
       els.prep.hidden = false;
-      const p = resolvePlan(chosen, getDtype());
+      const p = resolvePlan(chosen);
       if (p.note) badge(`↓ ${p.note}`, 'cpu');
-      markAttempt(p.device, p.dtype);
-      // f16: 워커가 fp32 실패 뒤 fp16 으로 되물러설 수 있는지. 못 하면 그 시도를 큐에 넣지 않는다.
-      worker.postMessage({ type: 'load', device: p.device, dtype: p.dtype,
-                           ios: iosLoadPath, f16: !fp16Blocked(chosen) });
+      markAttempt(p.device);
+      worker.postMessage({ type: 'load', device: p.device });
     }
   };
-  els.dtype.onchange = () => setDtype(getDtype());
   els.stop.onclick = () => {
     els.stop.disabled = true;
     els.phase.textContent = '중단하는 중…';
@@ -345,24 +294,14 @@ export function initSllm(root) {
       return;
     }
     chosen = await pickDevice();
-    const noF16 = fp16Blocked(chosen);
-    try { setDtype(localStorage.getItem(DTYPE_KEY) || 'fp32', false); } catch { setDtype('fp32', false); }
-    if (noF16) {
-      // 못 쓰는 선택지를 열어 두면 "골랐는데 무시된다"가 된다. 잠그고 사유를 라벨에 붙인다.
-      // 저장된 선택(localStorage)은 건드리지 않는다 — fp16 이 되는 기기에서 다시 열면 살아나야 한다.
-      const opt = els.dtype.querySelector('option[value="fp16"]');
-      if (opt) { opt.disabled = true; opt.textContent = `fp16 (사용 불가 · ${noF16})`; }
-      if (getDtype() === 'fp16') setDtype('fp32', false);
-    }
-    reportBrokenAttempt(noF16);                   // fp32 로 죽었으면 여기서 fp16 으로 내린다
+    reportBrokenAttempt();
     persistStorage();                             // 기다리지 않는다. 승인 여부가 로드를 막지 않는다.
     // iOS Safari 일반 탭은 7일간 상호작용이 없으면 캐시를 통째로 지운다. 홈 화면 앱은
     // 저장소가 분리되어 이 규칙에서 빠지므로, 홈 화면이 아닌 iOS 에서만 한 줄 안내한다.
     if (isIOS && !isStandalone) els.homeHint.hidden = false;
     if (chosen.device === 'webgpu') badge(`⚡ WebGPU · ${chosen.why}`, 'gpu');
     else                            badge(`🐢 WASM(CPU) · ${chosen.why}`, 'cpu');
-    if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)} (fp32 ${mb(NEED('fp32'))} · fp16 ${mb(NEED('fp16'))} 필요)`);
-    if (noF16) badge(`⚠ fp16 사용 불가 · ${noF16}`, 'cpu');   // 쓸 수 있으면 선택지가 열려 있는 것으로 충분하다
+    if (chosen.limit) badge(`GPU 버퍼 한계 ${mb(chosen.limit)} (텐서 최대 ${mb(NEED)} · 임베딩 16분할)`);
     els.phase.textContent = '준비 완료';
     els.start.disabled = false;
   })();

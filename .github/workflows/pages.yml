@@ -1,7 +1,7 @@
 # main 에 push 되면 GitHub 에 올라간 파일 기준으로 정적 사이트를 GitHub Pages 에 배포한다.
 #
 # 배포 대상 (저장소에 커밋된 것만):
-#   index.html, manifest.webmanifest, data.jsonl, web/, tokenizer/, model/
+#   index.html, manifest.webmanifest, web/ (data.jsonl 포함), tokenizer/, model/
 #
 # model.onnx (1.02 GB) 는 .gitignore 로 제외되어 있고 GitHub 에 올라가지 않는다.
 # web/sllm/worker.js 가 Hugging Face 에서 직접 받아오므로 여기서는 다루지 않는다.
@@ -41,7 +41,7 @@ jobs:
           rm -rf _site
           mkdir -p _site
 
-          for p in index.html manifest.webmanifest data.jsonl web tokenizer model; do
+          for p in index.html manifest.webmanifest web tokenizer model; do
             if [ ! -e "$p" ]; then
               echo "::error::필수 경로가 없습니다: $p"
               exit 1

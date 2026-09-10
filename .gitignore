@@ -74,9 +74,12 @@ runs/
 *.gguf
 *.onnx
 *.onnx_data
+*.onnx_data_*
 
 # Editors / OS
 .idea/
 .vscode/
 *.swp
 .DS_Store
+
+model/web

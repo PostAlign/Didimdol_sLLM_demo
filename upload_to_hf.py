@@ -6,17 +6,22 @@
   python upload_to_hf.py --dry-run       # 올릴 파일 목록과 원격 상태만 출력
   python upload_to_hf.py --force         # 크기가 같아도 다시 올림
   python upload_to_hf.py --private       # 비공개 레포로 생성
+  python upload_to_hf.py --prune         # 로컬 산출물에 없는 원격 model* 파일(옛 fp16 등)을 지운다
 
 파일마다 커밋을 따로 낸다. 1 GB 를 한 커밋으로 묶으면 중간에 끊겼을 때
 아무것도 남지 않기 때문이다. 끊긴 뒤 다시 실행하면 원격 크기가 일치하는
 파일은 건너뛰므로 남은 것만 이어서 올라간다.
 
-배포 포맷은 ONNX 외부 데이터 두 벌이다 (build_web_models.py 가 model/web/ 에 만든다).
-  model.onnx + model.onnx_data            fp32 (그래프 + 가중치)
-  model_fp16.onnx + model_fp16.onnx_data  fp16
+배포 포맷은 ONNX fp32 외부 데이터다 (build_web_models.py 가 model/web/ 에 만든다).
+  model.onnx + model.onnx_data, model.onnx_data_1, …   그래프 + 가중치 (파일당 128 MiB 이하)
+model/web/ 의 model* 파일을 전부 올리므로 가중치 파일 수가 바뀌어도 여기를 고칠 필요 없다.
 레포 루트에 config/토크나이저와 함께 평평하게 올려 optimum 의
 ORTModelForCausalLM.from_pretrained 와 브라우저의 transformers.js 가 그대로 읽게 한다.
-단일 파일이 아닌 이유는 build_web_models.py 머리말에 있다 (iPhone 메모리 한계).
+파일을 나눈 이유는 build_web_models.py 머리말에 있다 (스마트폰 메모리 한계).
+fp16 은 폐기했다. 레포에 남은 model_fp16.* 같은 옛 산출물은 --prune 으로 지운다 (model* 이름만 대상이라
+config/토크나이저/라이선스는 건드리지 않는다).
+
+업로드가 끝나면 web/sllm/worker.js 의 REVISION 을 새 커밋 SHA 로 바꾼다 (마지막에 출력해 준다).
 
 LICENSE / NOTICE / gemma_terms.md 는 Gemma Terms of Use 3.1 이 요구하는
 사본·고지 조건을 맞추기 위한 파일이라 반드시 함께 올린다.
@@ -51,11 +56,7 @@ FILES = [
     (TOK / "tokenizer_config.json", "tokenizer_config.json"),
     (TOK / "tokenizer.model", "tokenizer.model"),
     (TOK / "tokenizer.json", "tokenizer.json"),
-    (WEB / "model.onnx", "model.onnx"),
-    (WEB / "model_fp16.onnx", "model_fp16.onnx"),
-    (WEB / "model_fp16.onnx_data", "model_fp16.onnx_data"),
-    (WEB / "model.onnx_data", "model.onnx_data"),
-]
+] + [(p, p.name) for p in sorted(WEB.glob("model.onnx*"), key=lambda p: (p.suffix != ".onnx", len(p.name), p.name))]
 
 
 def remote_sizes(api: HfApi, repo: str) -> dict[str, int]:
@@ -73,6 +74,7 @@ def main() -> None:
     ap.add_argument("--private", action="store_true", help="비공개 레포로 생성")
     ap.add_argument("--dry-run", action="store_true", help="업로드 없이 목록만 출력")
     ap.add_argument("--force", action="store_true", help="원격 크기가 같아도 다시 올림")
+    ap.add_argument("--prune", action="store_true", help="로컬 산출물에 없는 원격 model* 파일을 삭제")
     args = ap.parse_args()
 
     token = os.environ.get(TOKEN_ENV)
@@ -96,13 +98,19 @@ def main() -> None:
         if not done:
             todo.append((p, dst, size))
 
-    if not todo:
+    local_names = {dst for _, dst in FILES}
+    stale = sorted(n for n in remote if n.startswith("model") and n not in local_names) if args.prune else []
+    for n in stale:
+        print(f"  [삭제] {n:26s} {remote[n] / 1e6:8.1f} MB", flush=True)
+
+    if not todo and not stale:
         print("\n모두 최신입니다.", flush=True)
         return
-    print(f"\n{len(todo)}개 / {sum(s for _, _, s in todo) / 1e9:.2f} GB 업로드", flush=True)
+    if todo:
+        print(f"\n{len(todo)}개 / {sum(s for _, _, s in todo) / 1e9:.2f} GB 업로드", flush=True)
 
     if args.dry_run:
-        print("--dry-run: 업로드하지 않았습니다.", flush=True)
+        print("--dry-run: 업로드·삭제하지 않았습니다.", flush=True)
         return
 
     api.create_repo(args.repo, repo_type="model", private=args.private, exist_ok=True)
@@ -118,7 +126,13 @@ def main() -> None:
         )
         print(f"[{i}/{len(todo)}] {dst} 완료", flush=True)
 
+    for n in stale:
+        api.delete_file(n, repo_id=args.repo, repo_type="model", commit_message=f"Delete {n}")
+        print(f"삭제: {n}", flush=True)
+
+    sha = api.repo_info(args.repo, repo_type="model").sha
     print(f"\n완료: https://huggingface.co/{args.repo}", flush=True)
+    print(f"web/sllm/worker.js 의 REVISION 을 이 SHA 로 바꾼다: {sha}", flush=True)
 
 
 if __name__ == "__main__":

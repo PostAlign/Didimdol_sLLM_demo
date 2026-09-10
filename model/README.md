@@ -34,15 +34,14 @@ Google **Gemma 3 270M Instruct**(`gemma-3-270m-it`)를 파인튜닝한 한국어
 | 아키텍처 | `Gemma3ForCausalLM` (decoder-only, 18층, hidden 640, GQA 4q/1kv, head_dim 256) |
 | 컨텍스트 | 32,768 (sliding window 512, 6층마다 full attention) |
 | vocab | 262,144 (Gemma 3 토크나이저 그대로) |
-| 배포 포맷 | ONNX fp32 (약 1.07 GB) · fp16 (약 0.54 GB), KV 캐시 포함 그래프 (opset 18), 가중치는 외부 데이터 파일 |
+| 배포 포맷 | ONNX fp32 (약 1.07 GB), KV 캐시 포함 그래프 (opset 18), 가중치는 외부 데이터 파일 여러 개 |
 | 주 언어 | 한국어 |
 
 ## 파일
 
 | 파일 | 설명 |
 | --- | --- |
-| `model.onnx` + `model.onnx_data` | 파인튜닝된 모델 (ONNX fp32). 그래프와 가중치(외부 데이터)가 분리되어 있으므로 두 파일을 같은 폴더에 두어야 합니다 |
-| `model_fp16.onnx` + `model_fp16.onnx_data` | 같은 모델의 fp16 변환본. 입출력(`past/present`, `logits`)은 fp32 그대로입니다. 메모리가 빡빡한 기기(iPhone 등)용이며 정확도 기준은 fp32 입니다 |
+| `model.onnx` + `model.onnx_data`, `model.onnx_data_1`, … | 파인튜닝된 모델 (ONNX fp32). 그래프와 가중치(외부 데이터, 파일당 128 MiB 이하)가 분리되어 있으므로 모든 파일을 같은 폴더에 두어야 합니다. tied embedding 은 16 개 청크로 나뉘어 있고 `logits` 는 마지막 위치만 냅니다 (브라우저 WebGPU 의 버퍼 한계 때문. 생성 결과는 원본과 동일) |
 | `config.json` / `generation_config.json` | 모델 · 생성 설정 |
 | `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json`, `special_tokens_map.json`, `added_tokens.json` | Gemma 3 토크나이저 |
 | `chat_template.jinja` | Gemma 3 대화 템플릿 (`<start_of_turn>` / `<end_of_turn>`) |
@@ -78,10 +77,10 @@ print(tok.decode(out[0][ids.shape[-1]:], skip_special_tokens=True))
 | 입력 | `input_ids` | `[batch, seq]` (int64) |
 | 입력 | `attention_mask` | `[batch, past + seq]` (int64) |
 | 입력 | `past_key_values.{0..17}.{key,value}` | `[batch, 1, past, 256]` (fp32) |
-| 출력 | `logits` | `[batch, seq, 262144]` |
+| 출력 | `logits` | `[batch, 1, 262144]` (마지막 위치만) |
 | 출력 | `present.{0..17}.{key,value}` | `[batch, 1, past + seq, 256]` |
 
-첫 프리필에서는 `past` 를 길이 0 텐서로 넣고, 이후 디코드 스텝에서는 직전 스텝의 `present.*` 를 그대로 `past_key_values.*` 로 넘깁니다. 종료 토큰은 `<eos>`(1) 와 `<end_of_turn>`(106) 입니다.
+`logits` 는 입력 길이와 무관하게 마지막 토큰 위치 하나만 나옵니다 (generate 에 필요한 건 그것뿐입니다). 첫 프리필에서는 `past` 를 길이 0 텐서로 넣고, 이후 디코드 스텝에서는 직전 스텝의 `present.*` 를 그대로 `past_key_values.*` 로 넘깁니다. 종료 토큰은 `<eos>`(1) 와 `<end_of_turn>`(106) 입니다.
 
 ## 프롬프트 형식
 

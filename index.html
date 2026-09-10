@@ -51,18 +51,9 @@
   button:disabled{opacity:.45;cursor:not-allowed}
   #phase,#trStatus{color:var(--dim);font-size:13px;white-space:nowrap;margin-left:auto}
   #homeHint{color:var(--dim);font-size:12px;margin:-6px 0 14px}
-  .opt{font-size:13px;color:var(--dim);display:flex;align-items:center;gap:6px;
-       white-space:nowrap;flex:0 1 auto;min-width:0}
-  .opt select{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);
-              background:#fff;color:var(--ink);min-width:0}
-  /* 480px 아래에서는 네 항목이 한 줄에 들어가지 않는다. 버튼과 상태를 첫 줄에 두고
-     정밀도를 통째로 둘째 줄로 내린다. order 로 정밀도를 맨 뒤로 보내야 100% 폭
-     항목이 앞줄을 밀어내지 않는다. */
   @media (max-width:480px){
     .controls{gap:8px}
-    .opt{order:1;flex:0 0 100%}
-    .opt select{flex:1 1 auto}
-    /* '완료 · 100/100행 (fp16 폴백 · WASM 폴백)' 같은 긴 상태 문구가 버튼 줄을
+    /* '완료 · 100/100행 (실패 3행 포함 · WASM 폴백)' 같은 긴 상태 문구가 버튼 줄을
        밀어내지 않도록, 좁은 화면에서는 남는 폭 안에서 접히게 둔다. */
     #phase,#trStatus{font-size:12px;white-space:normal;text-align:right;flex:1 1 auto;min-width:0}
     /* 320px 급 화면에서는 긴 칩 하나가 가로 스크롤을 만든다. 이때만 줄바꿈을 허용한다. */
@@ -146,7 +137,7 @@
     <div id="blocker" hidden>
       <div>
         <h2>이 기기에서는 실행할 수 없습니다</h2>
-        <p>이 평가는 fp32 1.07&nbsp;GB(또는 fp16 0.54&nbsp;GB) 모델을 브라우저에서 직접 구동합니다.
+        <p>이 평가는 fp32 1.07&nbsp;GB 모델을 브라우저에서 직접 구동합니다.
            iOS·iPadOS에서는 WebGPU가 필요하며, WebGPU는 <b>Safari 26 이상</b>에서 지원됩니다.</p>
         <p id="blockWhy"></p>
         <p>Safari 26 이상으로 업데이트하거나, 데스크톱 브라우저에서 열어 주세요.</p>
@@ -159,12 +150,6 @@
       <div class="controls">
         <button id="start" disabled>성능 평가 시작</button>
         <button id="stop" class="ghost" disabled>중단</button>
-        <label class="opt">정밀도
-          <select id="dtype">
-            <option value="fp32">fp32 (기본 · 1.07 GB)</option>
-            <option value="fp16">fp16 (0.54 GB)</option>
-          </select>
-        </label>
         <span id="phase">준비 중…</span>
       </div>
       <p id="homeHint" hidden>공유 → <b>홈 화면에 추가</b>로 실행하면 내려받은 모델이 Safari의 7일 저장소 삭제에서 제외되어 다음 실행 때 다시 받지 않습니다.</p>
@@ -185,7 +170,7 @@
 
       <section id="prep" hidden>
         <div class="dl" id="dlModel">
-          <div class="row"><b>가중치 (model.onnx_data)</b><span class="s">대기 중</span></div>
+          <div class="row"><b>가중치 (model.onnx_data · 분할 파일 1.07 GB)</b><span class="s">대기 중</span></div>
           <div class="bar"><div class="fill"></div></div>
         </div>
         <div class="dl" id="dlTok">
