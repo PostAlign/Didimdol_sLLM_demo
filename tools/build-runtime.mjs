@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
-import { mkdir, cp, readFile, writeFile, access } from 'node:fs/promises';
+import { mkdir, cp, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -7,13 +8,17 @@ const ortRoot = path.resolve(process.env.ORT_SOURCE || path.join(root, '.work/on
 const output = path.join(root, 'web/vendor');
 await mkdir(output, { recursive: true });
 const mode = process.env.ORT_MODE || 'asyncify';
+const profile = process.env.ORT_PROFILE || 'mobile';
+const threads = process.env.ORT_THREADS === '1';
 if (!['asyncify', 'jspi'].includes(mode)) throw new Error('ORT_MODE must be asyncify or jspi');
 const artifact = `ort-wasm-simd-threaded.${mode}`;
-const artifacts = path.resolve(process.env.ORT_ARTIFACTS || path.join(root, `.work/ort-build-${mode}/Release`));
+const sourceArtifact = `ort-wasm-simd${threads ? '-threaded' : ''}.${mode}`;
+const artifacts = path.resolve(process.env.ORT_ARTIFACTS || path.join(root, `.work/ort-build-${mode}-${profile}-t${Number(threads)}/Release`));
 // Require matching patched binaries; never quietly serve stock WASM with custom JS.
-const glue = await readFile(path.join(artifacts, `${artifact}.mjs`), 'utf8');
-if (!glue.includes('ortRangeLoaderVersion')) throw new Error('WASM factory is missing the range-loader patch');
-for (const ext of ['mjs', 'wasm']) await cp(path.join(artifacts, `${artifact}.${ext}`), path.join(output, `${artifact}.${ext}`));
+const glue = await readFile(path.join(artifacts, `${sourceArtifact}.mjs`), 'utf8');
+if (!/ortRangeLoaderVersion["']?\]?\s*=\s*2/.test(glue)) throw new Error('WASM factory requires range-loader ABI 2');
+// Stable public filenames; wasmPaths explicitly selects the matching binary.
+for (const ext of ['mjs', 'wasm']) await cp(path.join(artifacts, `${sourceArtifact}.${ext}`), path.join(output, `${artifact}.${ext}`));
 const define = Object.fromEntries(Object.entries({
   DISABLE_WEBGL: true, DISABLE_JSEP: true, DISABLE_WASM: false, DISABLE_WASM_PROXY: true,
   ENABLE_JSPI: mode === 'jspi', ENABLE_BUNDLE_WASM_JS: false, DISABLE_WEBGPU: false,
@@ -50,11 +55,16 @@ for (const ext of ['mjs', 'wasm']) await cp(path.join(root, `node_modules/onnxru
 await cp(path.join(ortRoot, 'LICENSE'), path.join(output, 'LICENSE-onnxruntime'));
 await cp(path.join(ortRoot, 'ThirdPartyNotices.txt'), path.join(output, 'ThirdPartyNotices-onnxruntime.txt'));
 await cp(path.join(root, 'node_modules/@huggingface/transformers/LICENSE'), path.join(output, 'LICENSE-transformers'));
-const modes = [];
-for (const candidate of ['asyncify', 'jspi']) {
-  try { await access(path.join(output, `ort.${candidate}.mjs`)); modes.push(candidate); } catch {}
-}
+const sha = data => createHash('sha256').update(data).digest('hex');
+let builds = {};
+try { builds = JSON.parse(await readFile(path.join(output, 'build.json'), 'utf8')).builds || {}; } catch {}
+builds[mode] = { profile, threads, sourceArtifact,
+  wasmBytes: (await readFile(path.join(output, `${artifact}.wasm`))).byteLength,
+  wasmSha256: sha(await readFile(path.join(output, `${artifact}.wasm`))),
+  patchSha256: sha(await readFile(path.join(root, 'patches/ort-session-range-loader.patch'))),
+  operatorsSha256: profile === 'mobile' ? sha(await readFile(path.join(root, 'model/required-operators.config'))) : null };
 await writeFile(path.join(output, 'build.json'), JSON.stringify({
-  ortVersion: '1.26.0-dev.20260416-b7804b056c', transformersVersion: '4.2.0', rangeLoaderVersion: 1, modes,
+  ortVersion: '1.26.0-dev.20260416-b7804b056c', transformersVersion: '4.2.0', rangeLoaderVersion: 2,
+  modes: Object.keys(builds), builds,
 }, null, 2));
 console.log(`Built browser runtime: ${mode} → web/vendor`);

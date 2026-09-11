@@ -1,5 +1,9 @@
 # Gemma 3 270M FP32: Safari 세션 생성 메모리 수정
 
+> 2026-09-11 후속 구현: 현재 기본값은 OPFS 범위 읽기·8 MiB staging·ABI 2·단일 스레드 모바일 빌드입니다.
+> 현재 구성과 iPhone 14 Pro Max/Chrome 검증 절차는 [iphone-fp32.md](iphone-fp32.md)를 참고하세요.
+> 아래 Blob/16 MiB 설명과 측정치는 이전 구현의 비교 기록입니다.
+
 대상은 `PostAlign/Didimdol_sLLM@8c50d7686bb1b205c02d42bb4b64505483c41a2b`, transformers.js 4.2.0,
 ORT `1.26.0-dev.20260416-b7804b056c`이다. iPhone 14 Pro Max/Safari 실기기는 이 작업 환경에 연결되어 있지 않다.
 따라서 이 문서는 소스에서 확인한 메모리 경로, 구현, 로컬 검증과 아직 필요한 실기기 검증을 구분한다.

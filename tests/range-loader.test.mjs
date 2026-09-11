@@ -84,3 +84,41 @@ test('heap is reacquired after async reads instead of retaining a detached view'
   assert.deepEqual(heap.subarray(123, 139), f.bytes.subarray(13));
   assert.equal(f.loader.close(true).cpuInitializerBytes, 16);
 });
+
+test('range descriptors preserve bytes and checkpoint GPU writes with current allocation counts', async () => {
+  const f = fixture();
+  const records = [];
+  f.loader.checkpoint = async record => { records.push(structuredClone(record)); };
+  // Remove the fixture's separate checkpoint flag; this test inspects the actual sequence.
+  f.request.gpu.device.queue.writeBuffer = (buffer, offset, data, dataOffset, length) => {
+    assert.equal(records.at(-1).stage, 'gpu-write');
+    assert.equal(records.at(-1).destinationOffset, offset);
+    assert.equal(records.at(-1).metrics.gpuWeightAllocated, f.uploaded.byteLength);
+    f.uploaded.set(new Uint8Array(data, dataOffset, length), offset);
+  };
+  const descriptor = { ortRangeSource: 2, size: f.bytes.byteLength,
+    async readRangeInto(offset, length, destination) {
+      assert.equal(records.at(-1).stage, 'range-read');
+      destination.set(f.bytes.subarray(offset, offset + length));
+    } };
+  await f.loader.load({ ...f.request, file: descriptor });
+  assert.deepEqual(f.uploaded, f.bytes.subarray(13));
+  assert.equal(records.at(-1).stage, 'initializer-complete');
+  assert.equal(f.loader.metrics.cpuStagingPeak, 8 * 2**20);
+});
+
+test('device-lost is emitted only after durable persistence finishes', async () => {
+  const f = fixture(16);
+  let lose, release, emitted = false;
+  f.request.gpu.device.lost = new Promise(resolve => { lose = resolve; });
+  const saved = new Promise(resolve => { release = resolve; });
+  f.loader.checkpoint = async record => { if (record.stage === 'device-lost') await saved; };
+  f.loader.emit = record => { if (record.stage === 'device-lost') emitted = true; };
+  f.loader.observeDevice(f.request.gpu.device);
+  lose({ reason: 'unknown', message: 'test loss' });
+  await Promise.resolve();
+  assert.equal(emitted, false);
+  release(); await f.loader.lossSaved;
+  assert.equal(emitted, true);
+  await assert.rejects(f.loader.load(f.request), /device lost/);
+});

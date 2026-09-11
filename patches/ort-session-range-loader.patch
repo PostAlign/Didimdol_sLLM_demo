@@ -13,15 +13,22 @@ index 8e45924db4..8978853859 100644
  
    # Enable LTO for release single-thread build
 diff --git a/js/web/lib/wasm/wasm-core-impl.ts b/js/web/lib/wasm/wasm-core-impl.ts
-index 18c536d8d9..f650241335 100644
+index 18c536d8d9..bd65321aa7 100644
 --- a/js/web/lib/wasm/wasm-core-impl.ts
 +++ b/js/web/lib/wasm/wasm-core-impl.ts
-@@ -358,6 +358,12 @@ export const createSession = async (
+@@ -358,6 +358,19 @@ export const createSession = async (
        const loadingPromises = [];
        for (const file of options.externalData) {
          const path = typeof file === 'string' ? file : file.path;
 +        const source = typeof file === 'string' ? file : file.data;
-+        if (typeof Blob !== 'undefined' && source instanceof Blob && wasm.ortRangeLoaderVersion === 1) {
++        if (source && typeof source === 'object' && 'ortRangeSource' in source) {
++          if (source.ortRangeSource !== 2 || wasm.ortRangeLoaderVersion !== 2) {
++            throw new Error('External range source requires Didimdol loader ABI 2');
++          }
++          wasm.mountExternalData(path, source as { ortRangeSource: number; size: number });
++          continue;
++        }
++        if (typeof Blob !== 'undefined' && source instanceof Blob && (wasm.ortRangeLoaderVersion ?? 0) >= 1) {
 +          wasm.mountExternalData(path, source);
 +          continue;
 +        }
@@ -30,7 +37,7 @@ index 18c536d8d9..f650241335 100644
            loadFile(typeof file === 'string' ? file : file.data).then((data) => {
              wasm.mountExternalData(path, data);
 diff --git a/js/web/lib/wasm/wasm-types.ts b/js/web/lib/wasm/wasm-types.ts
-index 842bcd0c24..d0f7298278 100644
+index 842bcd0c24..5b4a3a96b7 100644
 --- a/js/web/lib/wasm/wasm-types.ts
 +++ b/js/web/lib/wasm/wasm-types.ts
 @@ -468,13 +468,15 @@ export interface OrtWasmModule
@@ -46,7 +53,7 @@ index 842bcd0c24..d0f7298278 100644
     * @param externalDataFileData - specify the content data.
     */
 -  mountExternalData(externalDataFilePath: string, externalDataFileData: Uint8Array): void;
-+  mountExternalData(externalDataFilePath: string, externalDataFileData: Uint8Array | Blob): void;
++  mountExternalData(externalDataFilePath: string, externalDataFileData: Uint8Array | Blob | { ortRangeSource: number; size: number }): void;
    /**
     * Unmount all external data files from the internal map.
     */
@@ -262,7 +269,7 @@ index 146355f6a4..24e51f907c 100644
    Module.webgpuUploadExternalBuffer = (bufferHandle, data) => {
      const srcArrayBuffer = data.buffer;
 diff --git a/onnxruntime/wasm/pre.js b/onnxruntime/wasm/pre.js
-index f8a7fa0286..d8ba1cbb47 100644
+index f8a7fa0286..1d754bf774 100644
 --- a/onnxruntime/wasm/pre.js
 +++ b/onnxruntime/wasm/pre.js
 @@ -53,3 +53,20 @@ var SharedArrayBuffer =
@@ -272,7 +279,7 @@ index f8a7fa0286..d8ba1cbb47 100644
 +
 +// Private, versioned bridge used by the pinned Didimdol runtime. Keep property
 +// names quoted: the Emscripten closure pass must preserve the app-facing ABI.
-+Module["ortRangeLoaderVersion"] = 1;
++Module["ortRangeLoaderVersion"] = 2;
 +Module["ortLoadExternalRange"] = async (path, offset, length, target, loadType) => {
 +  const location = path.startsWith("./") ? path.substring(2) : path;
 +  const file = Module.MountedFiles && Module.MountedFiles.get(location);

@@ -1,10 +1,22 @@
 <!doctype html>
 <html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FP32 세션 생성 메모리 실험</title>
-<style>body{font:16px system-ui;max-width:1100px;margin:30px auto;padding:0 16px}input{width:95%;padding:8px}button{margin:12px 8px 12px 0;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}td,th{text-align:left;padding:8px;border-bottom:1px solid #ccc}table{width:100%}</style>
-<h1>FP32 세션 생성 메모리 실험</h1>
-<p>A–C: 기존 ORT + BlobFile, 파일 128/64/32 MiB. D–G: 수정 ORT, staging 64/32/16/8 MiB. 각 실험은 새 페이지에서 실행됩니다.</p>
-<label>실험 파일 목록 URL <input id="source" value="../../../model/experiments/experiments.json"></label>
-<button id="start">7개 실험 시작 / 이어하기</button><button id="export">JSON 저장</button><button id="reset">기록 초기화</button>
-<p id="status">준비</p><table><thead><tr><th>실험</th><th>결과</th><th>생성 시간</th><th>CPU staging peak</th><th>WASM heap peak</th><th>GPU weight</th></tr></thead><tbody id="rows"></tbody></table><pre id="last"></pre>
-<script type="module" src="./runner.js"></script></html>
+<title>iPhone FP32 실행 진단</title>
+<style>body{font:16px system-ui;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.6}input,select,button{font:inherit;padding:8px;margin:6px 0;max-width:100%;box-sizing:border-box}input{width:100%}button{margin-right:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #ddd}table{width:100%}</style>
+<h1>iPhone FP32 실행 진단</h1>
+<p>실험마다 새 페이지에서 시작합니다. 페이지가 예기치 않게 다시 열리면 중단된 기록을 표시하며 자동 재시도하지 않습니다. 모델 정밀도는 FP32입니다.</p>
+<label>기기·OS·브라우저 버전 <input id="device" placeholder="예: iPhone 14 Pro Max / iOS 26.4.2 / Chrome 버전"></label>
+<label>실험 <select id="kind">
+<option value="resident">1. GPU 가중치 상주만 확인 (약 1.07 GB)</option>
+<option value="runtime">2. 작은 모델 실행 + 2분 대기</option>
+<option value="load">3. 전체 모델 로드</option>
+<option value="warm-load">4. 저장된 모델 로드 5회</option>
+<option value="probe">5. 전체 모델 + 짧은·긴 입력 추론</option>
+<option value="evaluation">6. 같은 세션에서 100건 평가 2회</option>
+</select></label>
+<label>런타임 <select id="mode"><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
+<p><button id="start">실험 시작</button><button id="stop" disabled>중단</button><button id="export">진단 JSON 저장</button></p>
+<p id="status" role="status">준비</p>
+<table><thead><tr><th>실험</th><th>결과</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table>
+<pre id="last"></pre>
+<p><a href="../../../index.html">평가 화면</a> · <a href="./baseline.html">이전 파일 크기 비교 실험</a></p>
+<script type="module" src="./device-runner.js"></script></html>

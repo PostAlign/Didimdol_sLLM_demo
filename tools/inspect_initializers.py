@@ -1,4 +1,4 @@
-"""Inspect metadata only; never loads external weights into Python memory."""
+"""Inspect tensor metadata and hash external files in bounded 8 MiB blocks."""
 import argparse
 import hashlib
 import json
@@ -42,7 +42,21 @@ def inspect(path, revision=None):
     files = {}
     for row in external_rows:
         files[row["location"]] = max(files.get(row["location"], 0), row["offset"] + row["bytes"])
-    return dict(schemaVersion=1, revision=revision, graphSha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    file_rows = []
+    for name, minimum in files.items():
+        entry = dict(location=name, minimumBytes=minimum)
+        source = path.parent / name
+        if Path(name).is_absolute() or '..' in Path(name).parts:
+            raise ValueError(f'External file escapes model directory: {name}')
+        if source.is_file():
+            block_size = 8 * 2**20
+            hashes = []
+            with source.open('rb') as stream:
+                while block := stream.read(block_size):
+                    hashes.append(hashlib.sha256(block).hexdigest())
+            entry.update(bytes=source.stat().st_size, blockBytes=block_size, blockSha256=hashes)
+        file_rows.append(entry)
+    return dict(schemaVersion=2, revision=revision, graphSha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 graphBytes=path.stat().st_size, totalInitializerBytes=sum(row["bytes"] for row in rows),
                 totalExternalTensorBytes=sum(row["bytes"] for row in external_rows),
                 largestInitializerBytes=max((row["bytes"] for row in rows), default=0),
@@ -50,7 +64,7 @@ def inspect(path, revision=None):
                 # Actual CPU placement, driver memory and allocator overhead require runtime instrumentation.
                 expectedCpuStagingBytes={str(n): {"scratch": n * 2**20, "streamChunkUpperBound": n * 2**20}
                                          for n in (8, 16, 32, 64)},
-                files=[dict(location=name, minimumBytes=size) for name, size in files.items()], initializers=rows)
+                files=file_rows, initializers=rows)
 
 
 def main():

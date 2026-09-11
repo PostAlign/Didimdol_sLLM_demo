@@ -6,7 +6,7 @@ export async function installGpuTracking(largestTensorBytes, emit = () => {}) {
     throw new Error('Largest tensor exceeds WebGPU device limits');
   }
   let device;
-  const ledger = { requestedCurrent: 0, requestedPeak: 0, mappedUploadRequested: 0, bufferCount: 0, deviceLost: null };
+  const ledger = { requestedCurrent: 0, requestedPeak: 0, mappedUploadRequested: 0, bufferCount: 0, deviceLost: null, lastError: null };
   function track(created) {
     device = created;
     const create = device.createBuffer.bind(device);
@@ -30,7 +30,10 @@ export async function installGpuTracking(largestTensorBytes, emit = () => {}) {
       ledger.deviceLost = { reason: info.reason, message: info.message };
       emit({ stage: 'device-lost', info: ledger.deviceLost });
     });
-    device.addEventListener('uncapturederror', event => emit({ stage: 'gpu-uncaptured-error', message: event.error.message }));
+    device.addEventListener('uncapturederror', event => {
+      ledger.lastError = event.error.message;
+      emit({ stage: 'gpu-uncaptured-error', message: event.error.message });
+    });
     return device;
   }
   // Observe ORT's own device creation in this dedicated worker. Keep the native

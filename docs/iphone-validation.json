@@ -1,0 +1,527 @@
+{
+  "recordedAt": "2026-09-10T23:20:40.810Z",
+  "target": {
+    "device": "iPhone 14 Pro Max",
+    "os": "iOS 26 (minor version not reported)",
+    "browser": "Chrome for iOS (version not reported)",
+    "precision": "FP32"
+  },
+  "environment": {
+    "os": "Linux/WSL",
+    "browser": "Google Chrome for Testing 145.0.7632.6",
+    "gpu": "SwiftShader (software WebGPU)",
+    "node": "22.22.1",
+    "emscripten": "4.0.23",
+    "iphoneTested": false
+  },
+  "model": {
+    "revision": "8c50d7686bb1b205c02d42bb4b64505483c41a2b",
+    "graphSha256": "bbbfa81fde1230c1b16566d27e3e21d1dede60ec9df74fc6847921e86e012c5a",
+    "totalExternalTensorBytes": 1072392704,
+    "precision": "FP32",
+    "modelBytesChanged": false
+  },
+  "build": {
+    "ortVersion": "1.26.0-dev.20260416-b7804b056c",
+    "transformersVersion": "4.2.0",
+    "rangeLoaderVersion": 2,
+    "modes": [
+      "asyncify",
+      "jspi"
+    ],
+    "builds": {
+      "asyncify": {
+        "profile": "mobile",
+        "threads": false,
+        "sourceArtifact": "ort-wasm-simd.asyncify",
+        "wasmBytes": 18519696,
+        "wasmSha256": "7c90408eddc04941fe19e9eaca35d5200b3b7515297afe526fc4abc57273cece",
+        "patchSha256": "755113af50740813168d8de68a749ec93a0ef933ee4ae9a288707f239356c0e9",
+        "operatorsSha256": "04113cce236fe707559bfd7d1d06efe13df597b5734400b9403756979fc30ce7"
+      },
+      "jspi": {
+        "profile": "mobile",
+        "threads": false,
+        "sourceArtifact": "ort-wasm-simd.jspi",
+        "wasmBytes": 9373759,
+        "wasmSha256": "a453d93212291ed29343f8cfc7bb9d42c500c648ca3096b392aa9152f5367d06",
+        "patchSha256": "755113af50740813168d8de68a749ec93a0ef933ee4ae9a288707f239356c0e9",
+        "operatorsSha256": "04113cce236fe707559bfd7d1d06efe13df597b5734400b9403756979fc30ce7"
+      }
+    }
+  },
+  "wasmComparison": {
+    "previousAsyncifyBytes": 31582372,
+    "mobileAsyncifyBytes": 18519696,
+    "reductionPercent": 41.36,
+    "note": "Binary file sizes only; not measured process-memory savings."
+  },
+  "checks": {
+    "javascriptUnitTests": 11,
+    "pythonTests": 2,
+    "allPassed": true,
+    "runtimeBuilds": [
+      "asyncify mobile single-thread",
+      "jspi mobile single-thread"
+    ],
+    "fixtureModes": [
+      "asyncify",
+      "jspi",
+      "stock"
+    ],
+    "browserDiagnostics": [
+      "per-tab isolation",
+      "completed-run recovery",
+      "interrupted-run recovery without auto retry",
+      "late device fault overrides completion",
+      "user cancellation and JSON export"
+    ],
+    "fullModel": [
+      "251 external initializers loaded",
+      "OPFS source closed after create",
+      "two greedy BOS tokens match recorded FP32 baseline: 1106,4940",
+      "real shortest/longest inputs: 35/266 tokens, two generated tokens each",
+      "normal model/session/GPU cleanup acknowledged"
+    ]
+  },
+  "commands": [
+    "npm test",
+    ".venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
+    "npm run test:browser",
+    "ORT_MODES=asyncify TEST_APP_LOAD=1 TEST_FULL_MODEL=1 npm run test:browser",
+    "ORT_MODES=asyncify TEST_APP_LOAD=1 npm run test:browser",
+    "ORT_MODES='' npm run test:browser"
+  ],
+  "limitations": [
+    "No iPhone was available. These results do not establish iOS/Chrome success or diagnose the original page restart.",
+    "SwiftShader functionality checks do not measure iPhone latency, OS process memory, GPU driver memory or WASM compilation pressure.",
+    "Full-model browser tests override incognito storage quota to 8 GiB and stream the unchanged verified graph/weight files from localhost.",
+    "The resident-only automated test uses the 10 MiB fixture. Full-model GPU residency is exercised through ORT; the standalone 1.07 GB residency probe remains a device acceptance step.",
+    "Automated runtime probes use idleSeconds=0. The UI test stops during the default 120-second idle period; the full idle acceptance was not completed.",
+    "Five full-model cached loads and two 100-row evaluations were not executed locally. No full-dataset ROUGE or latency-equivalence claim is made.",
+    "WASM heap counters sample linear-memory capacity and GPU counters track requested allocations; neither represents OS RSS.",
+    "An OPFS cache hit trusts a prior verified completion marker and file size; it does not rehash the whole file each visit."
+  ],
+  "results": [
+    {
+      "id": "smoke-asyncify",
+      "kind": "range",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789082280067,
+      "pageReloadObserved": false,
+      "lastInitializer": "W",
+      "sessionCreateMs": 413,
+      "uploadDrainMs": 0.7000000029802322,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "storage": {
+        "totalFiles": 1,
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 1,
+        "verifiedBytes": 10496013,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 10496000,
+        "mappedUploadRequested": 0,
+        "bufferCount": 2,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "completedAt": 1789082281253
+    },
+    {
+      "id": "resident-asyncify",
+      "gpuWeightAllocated": 10496000,
+      "expectedBytes": 10496000,
+      "allBytesUsed": true,
+      "success": true,
+      "durationMs": 50.600000001490116
+    },
+    {
+      "id": "runtime-asyncify",
+      "inferenceVerified": true,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "storage": {
+        "totalFiles": 1,
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 1,
+        "verifiedBytes": 10496013,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "idleSeconds": 0,
+      "success": true,
+      "durationMs": 1146.2999999970198
+    },
+    {
+      "id": "smoke-jspi",
+      "kind": "range",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789082282637,
+      "pageReloadObserved": false,
+      "lastInitializer": "W",
+      "sessionCreateMs": 230,
+      "uploadDrainMs": 0.20000000298023224,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "storage": {
+        "totalFiles": 1,
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 1,
+        "verifiedBytes": 10496013,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 10496000,
+        "mappedUploadRequested": 0,
+        "bufferCount": 2,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "completedAt": 1789082283525
+    },
+    {
+      "id": "runtime-jspi",
+      "inferenceVerified": true,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 16777216,
+        "wasmHeapPeak": 16777216,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 10496000,
+        "gpuWeightPeak": 10496000,
+        "totalExternalTensorBytes": 10496000,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 3,
+        "deviceLost": null
+      },
+      "storage": {
+        "totalFiles": 1,
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 1,
+        "verifiedBytes": 10496013,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 10543232,
+        "mappedUploadRequested": 8192,
+        "bufferCount": 11,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "idleSeconds": 0,
+      "success": true,
+      "durationMs": 923.3999999985099
+    },
+    {
+      "id": "smoke-stock",
+      "kind": "stock",
+      "fileMiB": 32,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789082284559,
+      "pageReloadObserved": false,
+      "lastInitializer": "bias",
+      "sessionCreateMs": 394.5,
+      "uploadDrainMs": 3.2999999970197678,
+      "metrics": {
+        "cpuStagingPeak": 10485760,
+        "wasmHeapPeak": null,
+        "loadedInitializerCount": 2,
+        "rangeReadCount": 2
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 10496000,
+        "requestedPeak": 20971520,
+        "mappedUploadRequested": 10496000,
+        "bufferCount": 4,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 10532992,
+        "requestedPeak": 20971520,
+        "mappedUploadRequested": 10504192,
+        "bufferCount": 13,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "completedAt": 1789082285484
+    },
+    {
+      "id": "diagnostic-ui",
+      "success": true,
+      "tabIsolation": true,
+      "recoveryVerified": true,
+      "stopExportVerified": true
+    },
+    {
+      "id": "app-from-pretrained",
+      "stage": "session-create-complete",
+      "runtimeMode": "asyncify",
+      "stagingMiB": 8,
+      "durationMs": 10816.39999999851,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 315,
+        "deviceLost": null
+      },
+      "gpuLedger": {
+        "requestedCurrent": 1159892192,
+        "requestedPeak": 1160940768,
+        "mappedUploadRequested": 6661760,
+        "bufferCount": 1863,
+        "deviceLost": null,
+        "lastError": null
+      },
+      "storage": {
+        "totalFiles": 9,
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 9,
+        "verifiedBytes": 1072392704,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "lastInitializer": {
+        "initializerName": "onnx::Mul_7378",
+        "shape": [
+          640
+        ],
+        "index": 156,
+        "offset": 133764608,
+        "length": 2560,
+        "location": "model.onnx_data_1"
+      },
+      "success": true,
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 18940.79999999702,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 41321.39999999851,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "sessionMetrics": {
+        "stage": "session-create-complete",
+        "runtimeMode": "asyncify",
+        "stagingMiB": 8,
+        "durationMs": 10816.39999999851,
+        "metrics": {
+          "cpuStagingCurrent": 0,
+          "cpuStagingPeak": 8388608,
+          "wasmTempCurrent": 0,
+          "wasmTempPeak": 0,
+          "wasmHeapBytes": 24248320,
+          "wasmHeapPeak": 24248320,
+          "cpuInitializerBytes": 0,
+          "gpuWeightAllocated": 1072392704,
+          "gpuWeightPeak": 1072392704,
+          "totalExternalTensorBytes": 1072392704,
+          "loadedInitializerCount": 251,
+          "rangeReadCount": 315,
+          "deviceLost": null
+        },
+        "gpuLedger": {
+          "requestedCurrent": 1072401888,
+          "requestedPeak": 1072401892,
+          "mappedUploadRequested": 3064,
+          "bufferCount": 1275,
+          "deviceLost": null,
+          "lastError": null
+        },
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 9,
+          "verifiedBytes": 1072392704,
+          "openHandles": 0,
+          "peakOpenHandles": 1
+        },
+        "lastInitializer": {
+          "initializerName": "onnx::Mul_7378",
+          "shape": [
+            640
+          ],
+          "index": 156,
+          "offset": 133764608,
+          "length": 2560,
+          "location": "model.onnx_data_1"
+        }
+      },
+      "cleanupVerified": true
+    },
+    {
+      "id": "Gemma-FP32-8MiB",
+      "kind": "range",
+      "fileMiB": 128,
+      "stagingMiB": 8,
+      "success": true,
+      "startedAt": 1789081377390,
+      "pageReloadObserved": false,
+      "lastInitializer": "onnx::Mul_7378",
+      "sessionCreateMs": 9125.69999999553,
+      "uploadDrainMs": 0.8000000044703484,
+      "metrics": {
+        "cpuStagingCurrent": 0,
+        "cpuStagingPeak": 8388608,
+        "wasmTempCurrent": 0,
+        "wasmTempPeak": 0,
+        "wasmHeapBytes": 24248320,
+        "wasmHeapPeak": 24248320,
+        "cpuInitializerBytes": 0,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWeightPeak": 1072392704,
+        "totalExternalTensorBytes": 1072392704,
+        "loadedInitializerCount": 251,
+        "rangeReadCount": 315,
+        "deviceLost": null
+      },
+      "storage": {
+        "cacheHits": 0,
+        "migratedFiles": 0,
+        "downloadedFiles": 9,
+        "verifiedBytes": 1072392704,
+        "openHandles": 0,
+        "peakOpenHandles": 1
+      },
+      "sessionGpuLedger": {
+        "requestedCurrent": 1072401888,
+        "requestedPeak": 1072401892,
+        "mappedUploadRequested": 3064,
+        "bufferCount": 1275,
+        "deviceLost": null
+      },
+      "decode": [
+        {
+          "step": 0,
+          "token": 1106,
+          "ms": 6945
+        },
+        {
+          "step": 1,
+          "token": 4940,
+          "ms": 3786.39999999851
+        }
+      ],
+      "inferenceVerified": true,
+      "gpuLedger": {
+        "requestedCurrent": 1075809984,
+        "requestedPeak": 1076858560,
+        "mappedUploadRequested": 3504,
+        "bufferCount": 1591,
+        "deviceLost": null
+      },
+      "completedAt": 1789081415348,
+      "testStorageQuotaOverrideBytes": 8589934592
+    }
+  ]
+}

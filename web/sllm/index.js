@@ -6,12 +6,12 @@
  * WebGPU 가 필요한 건 이 탭뿐이라 페이지 전체를 막을 이유가 없다.
  *
  * 정밀도는 fp32 하나다. fp16 은 품질이 평가 기준이 못 되어 폐기했다. 스마트폰에서도 fp32 가
- * 올라가도록 모델 쪽(임베딩 분할 · 마지막 토큰 로짓 · 파일 분할)과 워커 쪽(파일 단위 캐시 ·
- * Blob 마운트)을 손봤다. 자세한 건 build_web_models.py 와 worker.js 머리말.
+ * 로드하기 위해 모델의 임베딩·파일 분할과 워커의 OPFS 범위 읽기를 사용한다.
+ * 실기기 검증 절차와 메모리 한계는 docs/iphone-fp32.md 참고.
  */
 
 import { ms, mb, f3, esc, setBar, makeBadge } from '../ui.js';
-import { readCheckpoint } from './diagnostics.js';
+import { readRun, newRunId, saveCheckpoint, runKey } from './diagnostics.js';
 
 export function initSllm(root) {
   const $ = (s) => root.querySelector(s);
@@ -34,7 +34,7 @@ export function initSllm(root) {
 
   // iOS 에서 WASM 은 가중치를 wasm 힙에 통째로 올려야 해서(1.07 GB) 탭 메모리 한계에 걸린다.
   // 수정한 WebGPU loader 는 외부 tensor 를 WASM staging 없이 GPU 에 올린다.
-  // GPU/Blob backing 의 실제 process 메모리 사용량은 실기기 계측 대상이다.
+  // GPU/파일 캐싱의 실제 process 메모리 사용량은 실기기 계측 대상이다.
   // iOS 의 WebGPU 는 Safari 26 부터라, 그 아래는 시도하지 않고 안내 후 차단한다.
   function iosBlock() {
     const ua = navigator.userAgent;
@@ -49,8 +49,8 @@ export function initSllm(root) {
   }
 
   // ── 저장소 영구화 ───────────────────────────────────────────────────────────
-  // 내려받은 가중치(1 GB, 파일 여러 개)는 워커가 Cache API 에 넣어 재방문 때 다시 쓴다.
-  // Cache API 는 기본이 best-effort 라 디스크가 부족하면 브라우저가 지울 수 있다.
+  // 내려받은 가중치(1 GB, 파일 여러 개)는 워커가 OPFS에 저장해 다시 쓴다.
+  // 기본 저장소는 best-effort라 디스크가 부족하면 브라우저가 지울 수 있다.
   // persist() 가 승인되면 그 삭제 대상에서 빠진다. persist() 는 Window 전용이라
   // 워커가 아니라 여기서 부른다. 결과는 흐름에 영향 없고 콘솔에만 남긴다.
   //   Chrome  : 사이트 관여도 기준으로 조용히 승인/거절
@@ -170,45 +170,90 @@ export function initSllm(root) {
     if (!root.hidden) d.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
-  // ── 로드 도중 프로세스 종료 감지 ────────────────────────────────────────────
-  // 스마트폰은 탭 메모리 한계를 넘으면 렌더러/WebContent 프로세스를 죽이고 페이지를 조용히 다시 연다.
-  // 콘솔도 오류도 남지 않아 "다운로드만 반복"처럼 보인다. 로드 시작 시 표식을 남기고
-  // ready/fatal 에서 지우면, 표식이 남은 채 부팅된 경우 = 지난 시도가 도중에 끊긴 것이다.
-  // 예외로 잡히는 실패는 기록하고 종료한다. 미완료 표식만으로 OOM 을 확정하지 않는다.
-  const ATTEMPT_KEY = 'didimdol.loadAttempt';
-  const markAttempt = (device) => {
-    try { localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ device, t: Date.now() })); } catch {}
-  };
-  const clearAttempt = () => { try { localStorage.removeItem(ATTEMPT_KEY); } catch {} };
+  // Per-tab markers survive reloads without borrowing another tab's attempt.
+  const ATTEMPT_KEY = 'didimdol.activeRun.v2';
+  const HISTORY_KEY = 'didimdol.runHistory.v2';
+  const readStored = (key, fallback) => { try { return JSON.parse(sessionStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+  const remember = (key, value) => { try { sessionStorage.setItem(key, JSON.stringify(value)); } catch {} };
+  let activeRun = null;
+  const history = readStored(HISTORY_KEY, []);
+  const lifecycle = readStored('didimdol.lifecycle.v2', []);
+  for (const name of ['pagehide', 'pageshow', 'visibilitychange']) {
+    addEventListener(name, event => {
+      lifecycle.push({ event: name, visibility: document.visibilityState, persisted: event.persisted, timestamp: Date.now() });
+      if (lifecycle.length > 32) lifecycle.shift();
+      remember('didimdol.lifecycle.v2', lifecycle);
+    });
+  }
+  function markAttempt(device, phase = 'load') {
+    activeRun = { runId: newRunId(), device, phase, t: Date.now() };
+    remember(ATTEMPT_KEY, activeRun);
+    history.push(activeRun.runId);
+    if (history.length > 8) history.shift();
+    remember(HISTORY_KEY, history);
+    return activeRun.runId;
+  }
+  const clearAttempt = () => { try { sessionStorage.removeItem(ATTEMPT_KEY); } catch {} };
   async function reportBrokenAttempt() {
-    let prev = null;
-    try { prev = JSON.parse(localStorage.getItem(ATTEMPT_KEY) ?? 'null'); } catch {}
-    if (!prev) return;
-    const checkpoint = await readCheckpoint();
-    console.warn('LAST CRASH POSITION (interrupted load; process kill is not proven)', checkpoint);
+    const prev = readStored(ATTEMPT_KEY, null);
+    if (!prev) {
+      // An old global marker cannot be reliably associated with an old checkpoint.
+      try {
+        if (localStorage.getItem('didimdol.loadAttempt')) {
+          localStorage.removeItem('didimdol.loadAttempt');
+          addRow(-1, null, '이전 버전의 미완료 로딩 기록이 있습니다. 종료 원인은 확인되지 않았습니다.');
+        }
+      } catch {}
+      return;
+    }
+    const run = await readRun(prev.runId);
     clearAttempt();
+    if (run && !run.fault && ['ready', 'complete', 'cancelled'].includes(run.status)) return;
+    const checkpoint = run?.fault || run?.last;
+    console.warn('LAST CRASH POSITION (interrupted run; cause unconfirmed)', run);
     const when = new Date(prev.t).toLocaleTimeString('ko-KR');
     addRow(-1, null,
-      `지난 시도(${when} · ${prev.device})가 모델 로드 도중 끝났습니다. 스마트폰은 탭 메모리 한계를 넘으면 `
-      + `오류 없이 페이지가 다시 열립니다. 다른 탭을 닫고 다시 시도해 보세요. `
-      + `가중치는 파일 단위로 캐시되므로 이미 받은 부분은 다시 받지 않습니다.`
-      + (checkpoint ? ` 마지막 기록: ${checkpoint.stage} · ${checkpoint.initializerName ?? ''}` : ''));
+      `지난 ${prev.phase === 'run' ? '평가' : '로딩'}(${when} 시작)가 도중에 끝났습니다. `
+      + '페이지 이동·새로고침 또는 브라우저/GPU 종료 가능성이 있으며, 메모리 부족은 아직 확인되지 않았습니다. '
+      + '검증·저장이 완료된 가중치 파일은 다시 사용합니다. 진단 기록을 저장해 주세요.'
+      + (checkpoint ? ` 마지막 기록: ${checkpoint.stage} · ${checkpoint.initializerName || ''}` : '')
+      + (checkpoint?.metrics ? ` · GPU 가중치 ${mb(checkpoint.metrics.gpuWeightAllocated)} · ${checkpoint.metrics.loadedInitializerCount}개 완료` : ''));
   }
+  $('#exportDiagnostics').onclick = async () => {
+    const runs = await Promise.all(history.map(readRun));
+    const blob = new Blob([JSON.stringify({ schemaVersion: 2, exportedAt: new Date().toISOString(),
+      userAgent: navigator.userAgent, activeRun: readStored(ATTEMPT_KEY, null),
+      lifecycle: readStored('didimdol.lifecycle.v2', []), runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'didimdol-diagnostics.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const environment = { userAgent: navigator.userAgent, isIOS, isStandalone };
 
   // ── 워커 ────────────────────────────────────────────────────────────────────
   const workerURL = new URL('./worker.js', import.meta.url);
   const runtimeOptions = new URLSearchParams(location.search);
   workerURL.searchParams.set('ortMode', runtimeOptions.get('ortMode') || 'asyncify');
-  const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 16);
+  const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
+  workerURL.searchParams.set('trace', runtimeOptions.get('trace') || '0');
   const worker = new Worker(workerURL, { type: 'module' });
   let loaded = false, chosen = null, nRows = 100;
 
   // 모듈 import 실패 등 워커 스크립트 자체의 오류는 onmessage 로 오지 않는다.
-  worker.onerror = (e) => {
+  worker.onerror = async (e) => {
+    if (!activeRun) markAttempt('webgpu', 'startup');
+    const run = await readRun(activeRun?.runId);
+    if (activeRun) {
+      const fault = { stage: 'worker-error', message: e.message, timestamp: Date.now() };
+      await saveCheckpoint({ ...run, runId: activeRun.runId, status: 'failed', fault, last: fault }, runKey(activeRun.runId));
+    }
+    clearAttempt();
     els.phase.textContent = '오류';
     els.prep.hidden = true;
     addRow(-1, null, `워커 오류: ${e.message ?? e}`);
-    els.start.disabled = false; els.stop.disabled = true;
+    els.start.disabled = true; els.stop.disabled = true;
+    els.phase.textContent = '페이지를 새로 열어 다시 시도해 주세요.';
+    worker.terminate();
   };
 
   worker.onmessage = ({ data: m }) => {
@@ -219,6 +264,7 @@ export function initSllm(root) {
         if (m.record.stage === 'device-lost') {
           els.phase.textContent = 'GPU 연결이 끊겼습니다. 페이지를 새로 열어 다시 시도해 주세요.';
           els.start.disabled = true; els.stop.disabled = true;
+          clearAttempt();
           worker.terminate();
         } else {
           els.phase.textContent = `가중치 업로드 ${m.record.metrics.loadedInitializerCount}개 완료 · ${m.record.initializerName}`;
@@ -241,16 +287,18 @@ export function initSllm(root) {
         els.prep.hidden = true;
         els.runbar.hidden = false;
         setBar(bars.run, 0, `0 / ${nRows}`);
-        worker.postMessage({ type: 'run' });
+        worker.postMessage({ type: 'run', runId: markAttempt(m.device, 'run'), environment });
         break;
       case 'row':
         addRow(m.i, m.r, m.error, m.attempts);
         setBar(bars.run, m.progress, `${m.i + 1} / ${nRows}`);
         break;
       case 'done':
+        clearAttempt();
         finish(m);
         break;
       case 'aborted':
+        clearAttempt();
         els.phase.textContent = `중단됨 (${m.at}행까지 실행)`;
         els.start.disabled = false; els.stop.disabled = true;
         break;
@@ -260,7 +308,7 @@ export function initSllm(root) {
         els.prep.hidden = true;
         addRow(-1, null, m.error);
         // ORT may keep a failed WASM instance/allocator. Retry in a fresh page.
-        els.phase.textContent = '로드 실패 · 페이지를 새로 열어 다시 시도해 주세요.';
+        els.phase.textContent = `${m.cancelled ? '중단됨' : '실행 실패'} · 페이지를 새로 열어 다시 시도해 주세요.`;
         els.start.disabled = true; els.stop.disabled = true;
         worker.terminate();
         break;
@@ -292,19 +340,32 @@ export function initSllm(root) {
     if (loaded) {
       els.runbar.hidden = false;
       setBar(bars.run, 0, `0 / ${nRows}`);
-      worker.postMessage({ type: 'run' });
+      worker.postMessage({ type: 'run', runId: markAttempt('webgpu', 'run'), environment });
     } else {
       els.prep.hidden = false;
       const p = resolvePlan(chosen);
       if (p.note) badge(`↓ ${p.note}`, 'cpu');
-      markAttempt(p.device);
-      worker.postMessage({ type: 'load', device: p.device, stagingMiB });
+      const runId = markAttempt(p.device);
+      worker.postMessage({ type: 'load', device: p.device, stagingMiB, runId, environment });
     }
   };
   els.stop.onclick = () => {
     els.stop.disabled = true;
     els.phase.textContent = '중단하는 중…';
     worker.postMessage({ type: 'stop' });
+    const runId = activeRun?.runId;
+    // A GPU wait cannot always be interrupted by an AbortSignal. The window can
+    // end the worker and record an intentional stop even when the GPU is stuck.
+    setTimeout(async () => {
+      if (!runId || readStored(ATTEMPT_KEY, null)?.runId !== runId) return;
+      worker.terminate();
+      const run = await readRun(runId);
+      await saveCheckpoint({ ...run, runId, status: 'cancelled',
+        last: { stage: 'user-cancelled', timestamp: Date.now() } }, runKey(runId));
+      clearAttempt(); loaded = false;
+      els.prep.hidden = true; els.start.disabled = true;
+      els.phase.textContent = '중단됨 · 페이지를 새로 열어 다시 시작해 주세요.';
+    }, 3000);
   };
 
   // ── 부팅 ────────────────────────────────────────────────────────────────────

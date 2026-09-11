@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 import numpy as np
 import onnx
@@ -24,6 +25,9 @@ class ModelToolsTest(unittest.TestCase):
             metadata = inspect(path)
             self.assertEqual(metadata['initializers'][0]['declaredLength'], weights.nbytes)
             self.assertEqual(metadata['largestInitializerBytes'], weights.nbytes)
+            files_bytes = (path.parent / metadata['files'][0]['location']).read_bytes()
+            self.assertEqual(metadata['files'][0]['blockSha256'], [hashlib.sha256(files_bytes).hexdigest()])
+            self.assertEqual(metadata['files'][0]['bytes'], len(files_bytes))
             np.testing.assert_array_equal(numpy_helper.to_array(onnx.load(path).graph.initializer[0]), weights)
 
     def test_file_cap_accounts_for_alignment(self):

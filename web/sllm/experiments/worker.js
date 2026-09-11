@@ -1,9 +1,30 @@
 import { SessionRangeLoader } from '../range-loader.js';
 import { installGpuTracking } from '../gpu-device.js';
 import { saveCheckpoint } from '../diagnostics.js';
+import { OpfsWeightStore } from '../opfs-store.js';
+
+function shardResponse(shards, resolve) {
+  let reader, index = 0;
+  return new Response(new ReadableStream({
+    async pull(controller) {
+      for (;;) {
+        if (!reader) {
+          if (index === shards.length) { controller.close(); return; }
+          const response = await fetch(resolve(shards[index++].url));
+          if (!response.ok || !response.body) throw new Error('Experiment shard download failed');
+          reader = response.body.getReader();
+        }
+        const { done, value } = await reader.read();
+        if (!done) { controller.enqueue(value); return; }
+        reader.releaseLock(); reader = null;
+      }
+    },
+    async cancel() { await reader?.cancel(); reader?.releaseLock(); },
+  }));
+}
 
 self.onmessage = async ({ data: config }) => {
-  let session, loader, tracked;
+  let session, loader, tracked, store;
   const result = { ...config.experiment, success: false, startedAt: Date.now(), pageReloadObserved: false };
   try {
     const mode = config.mode || (config.experiment.kind === 'stock' ? 'stock' : 'asyncify');
@@ -26,6 +47,7 @@ self.onmessage = async ({ data: config }) => {
     const files = description.variants[String(config.experiment.fileMiB)];
     if (!files) throw new Error(`Missing ${config.experiment.fileMiB} MiB physical files`);
     const externalData = [];
+    if (config.storage === 'opfs') store = await OpfsWeightStore.open(manifest);
     const stockMetrics = { cpuStagingPeak: 0, wasmHeapPeak: null, loadedInitializerCount: 0, rangeReadCount: 0 };
     // Baselines use the repository's original BlobFile technique, without its
     // forbidden eager retry. null metrics mean unmeasured, never zero.
@@ -45,6 +67,12 @@ self.onmessage = async ({ data: config }) => {
     let cache;
     try { cache = await caches.open('didimdol-experiment-shards-v1'); } catch {}
     for (const file of files) {
+      if (store) {
+        const metadata = manifest.files.find(entry => entry.location === file.location);
+        await store.prepare(metadata, { openResponse: () => shardResponse(file.shards, resolve) });
+        externalData.push({ path: file.location, data: store.descriptor(metadata) });
+        continue;
+      }
       const parts = [];
       for (const shard of file.shards) {
         const url = resolve(shard.url);
@@ -72,6 +100,7 @@ self.onmessage = async ({ data: config }) => {
       if (blob.size !== file.bytes) throw new Error('Logical file size mismatch');
       externalData.push({ path: file.location, data: mode === 'stock' ? new StockBlobFile(blob, file.location) : blob });
     }
+    store?.finishPreparation();
     tracked = await installGpuTracking(manifest.largestInitializerBytes);
     if (mode !== 'stock') {
       loader = new SessionRangeLoader({ manifest, stagingMiB: config.experiment.stagingMiB,
@@ -96,6 +125,8 @@ self.onmessage = async ({ data: config }) => {
     await tracked.device.queue.onSubmittedWorkDone();
     result.uploadDrainMs = performance.now() - drainStart;
     result.metrics = loader?.close(true) || stockMetrics;
+    store?.close();
+    if (store) result.storage = { ...store.metrics };
     externalData.length = 0;
     result.sessionGpuLedger = { ...tracked.ledger };
     result.success = true;
@@ -143,6 +174,7 @@ self.onmessage = async ({ data: config }) => {
     result.error = String(error.stack || error);
     if (loader && !loader.closed) result.metrics = loader.close(false);
   } finally {
+    store?.close();
     tracked?.restore();
     if (tracked) result.gpuLedger = { ...tracked.ledger };
     if (session) await session.release();
