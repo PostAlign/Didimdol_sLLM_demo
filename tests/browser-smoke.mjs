@@ -204,6 +204,10 @@ try {
   }, origin);
   // A persisted checkpoint must be associated with this tab's run, and survive reload/export.
   await page.goto(`${origin}/index.html`);
+  // goto() waits for page load, but pickDevice()/reportBrokenAttempt() can still
+  // be running. Seed only after boot finishes, otherwise this first page can
+  // consume and clear the marker before the reload under test.
+  await page.locator('#start:not([disabled])').waitFor();
   await page.evaluate(async () => {
     const { RunDiagnostics } = await import('/web/sllm/diagnostics.js');
     const run = new RunDiagnostics('reload-test');
