@@ -6,13 +6,14 @@ export const STAGING_MIB = [2, 4, 8, 16, 32, 64];
 /** Called inside OrtCreateSession by the patched EM_ASYNC_JS bridge. */
 export class SessionRangeLoader {
   constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal,
-    gpuLedger = () => null, clock = () => performance.now() }) {
+    gpuLedger = () => null, gpuTracker = null, clock = () => performance.now() }) {
     if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 2, 4, 8, 16, 32 or 64');
     this.stagingBytes = stagingMiB * 2 ** 20;
     this.checkpoint = checkpoint;
     this.emit = emit;
     this.signal = signal;
-    this.gpuLedger = gpuLedger;
+    this.gpuTracker = gpuTracker;
+    this.gpuLedger = gpuTracker ? () => gpuTracker.ledger : gpuLedger;
     this.clock = clock;
     this.lossSaved = Promise.resolve();
     this.maxCpuTensorBytes = maxCpuTensorBytes;
@@ -29,6 +30,7 @@ export class SessionRangeLoader {
       wasmHeapBytes: 0, wasmHeapPeak: 0, cpuInitializerBytes: 0,
       gpuWeightAllocated: 0, gpuWeightPeak: 0,
       gpuWeightUploaded: 0, gpuWeightBufferCount: 0, gpuWriteCalls: 0,
+      gpuWriteReturnedBytes: 0, gpuQueueCompletedBytes: 0, gpuValidatedInitializerCount: 0,
       gpuWriteMs: 0, gpuWaitMs: 0, gpuWaitPeakMs: 0,
       totalExternalTensorBytes: manifest.totalExternalTensorBytes,
       loadedInitializerCount: 0, rangeReadCount: 0, deviceLost: null,
@@ -43,6 +45,7 @@ export class SessionRangeLoader {
   check() {
     this.signal?.throwIfAborted();
     if (this.metrics.deviceLost) throw new Error('WebGPU device lost');
+    if (this.gpuTracker?.ledger.lastError) throw new Error(`WebGPU: ${this.gpuTracker.ledger.lastError}`);
   }
   sampleMetrics() {
     if (this.getHeap) {
@@ -73,6 +76,8 @@ export class SessionRangeLoader {
     if (isCpu && init.bytes > this.maxCpuTensorBytes) throw new Error(`Large initializer assigned to CPU: ${name}`);
     this.last = { initializerName: name, shape: init.shape, index: init.index,
       offset: init.offset, length: init.bytes, location: init.location };
+    await this.gpuTracker?.flush();
+    this.check();
     await this.record('allocate-initializer', { placement: isCpu ? 'cpu' : 'gpu' });
     this.event('initializer-before-allocate', this.last);
   }
@@ -107,6 +112,11 @@ export class SessionRangeLoader {
       // alone cannot guarantee that the main thread saved the crash position in time.
       if (gpu) {
         this.observeDevice(gpu.device);
+        this.gpuTracker?.observeBuffer(gpu.device, gpu.buffer);
+        // Allocation scopes are opened by createBuffer interception, before the
+        // native buffer exists. Persist their result before uploading any bytes.
+        await this.gpuTracker?.flush();
+        this.check();
         if (length % 4 || gpu.buffer.size < length || length > gpu.device.limits.maxBufferSize ||
             length > gpu.device.limits.maxStorageBufferBindingSize) throw new Error(`GPU size/alignment: ${init.name}`);
         if (!this.gpuBuffers.has(gpu.buffer)) {
@@ -146,7 +156,7 @@ export class SessionRangeLoader {
         this.event('range-read-complete', { offset: offset + position, bytes: size });
         if (gpu) {
           this.check();
-          await this.record('gpu-write', range);
+          await this.record('gpu-write', { ...range, operation: 'writeBuffer', phase: 'before-call' });
           // FP32 lengths, offsets and staging sizes are multiples of four. No
           // full-tensor MAP_WRITE buffer and no CPU-to-WASM copy on this path.
           operation = 'writeBuffer';
@@ -155,9 +165,10 @@ export class SessionRangeLoader {
           range.gpuWriteMs = this.clock() - writeStart;
           this.metrics.gpuWriteMs += range.gpuWriteMs;
           this.metrics.gpuWriteCalls++;
+          this.metrics.gpuWriteReturnedBytes += size;
           this.event('gpu-write-buffer', { offset: position, bytes: size });
           // Bound driver upload backlog too, not just JS references.
-          await this.record('gpu-wait', range);
+          await this.record('gpu-wait', { ...range, operation: 'onSubmittedWorkDone', phase: 'before-call' });
           operation = 'onSubmittedWorkDone';
           const waitStart = this.clock();
           await gpu.device.queue.onSubmittedWorkDone();
@@ -167,6 +178,7 @@ export class SessionRangeLoader {
           if (this.metrics.deviceLost) throw new Error('WebGPU device lost during upload');
           // Queue completion observed, not a physical-memory or error-scope measurement.
           this.metrics.gpuWeightUploaded += size;
+          this.metrics.gpuQueueCompletedBytes += size;
         } else {
           const heap = getHeap();
           checkedRange(target + position, size, heap.byteLength);
@@ -177,6 +189,7 @@ export class SessionRangeLoader {
       }
       operation = 'popErrorScope';
       while (scopes) await popScope();
+      if (gpu) this.metrics.gpuValidatedInitializerCount++;
       this.completed.add(init.name);
       this.metrics.loadedInitializerCount = this.completed.size;
       await this.record('initializer-complete');

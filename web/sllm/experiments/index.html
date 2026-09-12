@@ -20,7 +20,8 @@
 <p>전송 크기는 임시 버퍼 크기를 바꿉니다. 전체 가중치의 GPU 상주량 약 1,023 MiB는 동일합니다. 작은 모델 실험은 실행 후 120초 동안 관찰합니다.</p>
 <p><button id="start">실험 시작</button><button id="stop" disabled>중단</button><button id="export">진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>
-<table><thead><tr><th>실험</th><th>결과</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table>
+<p>같은 기기·릴리스·런타임에서 전송 크기와 캐시 조건을 비교해 주세요. GPU 계측이 부분 관측이면 전체 할당 이력을 확인할 수 없습니다.</p>
+<div style="overflow-x:auto"><table style="min-width:1200px"><thead><tr><th>실험·설정</th><th>결과</th><th>기기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table></div>
 <pre id="last"></pre>
 <p><a href="../../../index.html">평가 화면</a> · <a href="./baseline.html">이전 파일 크기 비교 실험</a></p>
 <script type="module" src="./bootstrap.js"></script></html>

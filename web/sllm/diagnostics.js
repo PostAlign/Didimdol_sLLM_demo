@@ -41,6 +41,7 @@ export async function readCheckpoint(key = 'last') {
 export const newRunId = () => crypto.randomUUID();
 export const runKey = runId => `run:${runId}`;
 const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-verified', 'weights-prepared',
+  'resident-start',
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
   'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'ready', 'complete', 'failed', 'cancelled']);
 const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error']);
@@ -54,11 +55,56 @@ export const buildIdentity = build => ({ releaseId: build.releaseId, provenance:
 export const errorDetails = error => ({ errorType: error?.constructor?.name || error?.name || 'Error',
   message: String(error?.message ?? error) });
 
+export const gpuOperationContext = record => ({ observedDuring: record?.stage,
+  ...Object.fromEntries(['initializerName', 'shape', 'index', 'offset', 'length', 'location',
+    'fileOffset', 'destinationOffset', 'chunkBytes'].filter(key => record?.[key] !== undefined).map(key => [key, record[key]])) });
+
+export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
+  const { lifecycle = [], ...details } = context;
+  const startedAt = run.startedAt ?? run.milestones?.['load-start']?.timestamp;
+  return { ...details, observedAt, priorStatus: run.status, lastTimestamp: run.last?.timestamp ?? null,
+    classification: run.fault ? 'known-fault' : 'interrupted', cause: run.fault ? 'recorded-fault' : 'unknown',
+    // Retain historical hints, but only associate events inside this run's time
+    // interval and, for new records, with its explicit UUID.
+    lifecycleHistory: lifecycle,
+    lifecycle: lifecycle.filter(event => Number.isFinite(startedAt) && event.timestamp >= startedAt &&
+      event.timestamp <= observedAt && (!event.runId || event.runId === run.runId)) };
+}
+
+export function diagnosticSummary(run, sessionFallback = null) {
+  if (!run) return null;
+  const last = run.last || {}, fault = run.fault;
+  const session = run.summary?.sessionMetrics || sessionFallback || run.summary;
+  const progress = [last, ...(run.records || []).slice().reverse()].find(r => r.metrics || r.gpuWeightAllocated != null) || last;
+  const metrics = progress.metrics || session?.metrics || {};
+  const ledger = last.gpuLedger || progress.gpuLedger || run.summary?.gpuLedger || session?.gpuLedger;
+  const allocated = metrics.gpuWeightAllocated ?? progress.gpuWeightAllocated ?? run.summary?.gpuWeightAllocated ?? null;
+  let trackingStatus = ledger?.tracking?.status ?? 'unknown';
+  // Old schema-3 exports can contain apparently valid zero ledgers. Do not
+  // upgrade those to complete, or invent measurements for schema-2 exports.
+  if (!ledger?.tracking && allocated > 0 && ledger && (ledger.bufferCount === 0 || ledger.requestedCurrent === 0)) trackingStatus = 'partial';
+  const interrupted = run.status === 'running' && !!run.recovery;
+  return { effectiveStatus: fault ? 'failed' : interrupted ? 'interrupted' : run.status,
+    stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
+    destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
+    loadedInitializerCount: metrics.loadedInitializerCount ?? progress.loadedInitializerCount ?? run.summary?.loadedInitializerCount ?? null,
+    expectedInitializerCount: run.milestones?.['graph-verified']?.expectedInitializerCount ??
+      run.milestones?.['resident-start']?.expectedInitializerCount ?? run.milestones?.['runtime-create']?.expectedInitializerCount ??
+      run.summary?.expectedInitializerCount ?? null,
+    gpuWeightAllocated: allocated,
+    gpuWriteReturnedBytes: metrics.gpuWriteReturnedBytes ?? progress.gpuWriteReturnedBytes ?? run.summary?.gpuWriteReturnedBytes ?? null,
+    gpuQueueCompletedBytes: metrics.gpuQueueCompletedBytes ?? metrics.gpuWeightUploaded ?? progress.gpuWeightUploaded ?? run.summary?.gpuWeightUploaded ?? null,
+    gpuValidatedInitializerCount: metrics.gpuValidatedInitializerCount ?? run.summary?.gpuValidatedInitializerCount ?? null,
+    trackingStatus, storage: run.milestones?.['weights-prepared']?.storage ?? session?.storage ?? null,
+    releaseId: run.environment?.build?.releaseId ?? null };
+}
+
+export const trackingLabel = status => ({ complete: '정상', partial: '부분 관측', unbound: '연결 미확인', unknown: '미기록' }[status] || '미기록');
+
 /** Recovery is evidence from a later page, never a rewrite of the interrupted worker's last/fault. */
 export async function recordRecovery(run, context = {}) {
   if (!run?.runId || (run.status !== 'running' && !run.fault)) return null;
-  const recovery = { observedAt: Date.now(), priorStatus: run.status, lastTimestamp: run.last?.timestamp ?? null,
-    classification: run.fault ? 'known-fault' : 'interrupted', cause: run.fault ? 'recorded-fault' : 'unknown', ...context };
+  const recovery = recoveryEvidence(run, context);
   await saveCheckpoint(recovery, `recovery:${run.runId}`);
   return recovery;
 }

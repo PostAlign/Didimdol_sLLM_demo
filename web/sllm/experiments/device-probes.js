@@ -1,4 +1,4 @@
-import { RunDiagnostics, newRunId, buildIdentity, errorDetails } from '../diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, errorDetails, gpuOperationContext } from '../diagnostics.js';
 import { SessionRangeLoader, STAGING_MIB } from '../range-loader.js';
 import { OpfsWeightStore } from '../opfs-store.js';
 import { installGpuTracking } from '../gpu-device.js';
@@ -8,89 +8,118 @@ import { loadOrt, runtimeRelease } from '../ort-runtime.js';
 /** Use every uploaded element while retaining all weight buffers until the end. No ORT import. */
 export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
   if (!STAGING_MIB.includes(stagingMiB)) throw new Error('Invalid staging size');
-  const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) throw new Error('WebGPU adapter unavailable');
-  const largest = manifest.largestInitializerBytes;
-  const device = await adapter.requestDevice({ requiredLimits: {
-    maxBufferSize: Math.max(268435456, largest), maxStorageBufferBindingSize: Math.max(134217728, largest),
-  } });
-  const buffers = [];
-  let allocated = 0, uploaded = 0, lost, closed = false, lossSaved = Promise.resolve();
-  device.lost.then(info => {
-    if (closed && info.reason === 'destroyed') return;
-    lost = { reason: info.reason, message: info.message };
-    lossSaved = checkpoint({ stage: 'device-lost', info: lost, gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded });
-  });
-  device.addEventListener('uncapturederror', event => {
-    void checkpoint({ stage: 'gpu-uncaptured-error', ...errorDetails(event.error) });
-  });
-  device.pushErrorScope('out-of-memory');
-  device.pushErrorScope('validation');
-  let scopes = 2;
+  const persist = checkpoint;
+  let current = {}, tracked;
+  tracked = await installGpuTracking(manifest.largestInitializerBytes, record => {
+    if (['gpu-error', 'gpu-uncaptured-error', 'device-lost'].includes(record.stage)) {
+      return persist({ ...record, gpuLedger: tracked?.ledger });
+    }
+  }, { context: () => gpuOperationContext(current) });
+  checkpoint = async record => {
+    current = record;
+    await tracked.flush();
+    await persist({ ...record, gpuLedger: tracked.ledger });
+    if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
+  };
   try {
-    const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { entryPoint: 'main', module: device.createShaderModule({ code: `
-      @group(0) @binding(0) var<storage, read> weights: array<f32>;
-      @group(0) @binding(1) var<storage, read_write> sums: array<f32>;
-      @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-        var sum = 0.0;
-        for (var i = id.x; i < arrayLength(&weights); i += 64u) { sum += weights[i]; }
-        sums[id.x] = sum;
-      }` }) } });
-    const output = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const readback = device.createBuffer({ size: 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    buffers.push(output, readback);
-    const scratch = new Float32Array(stagingMiB * 2**20 / 4).fill(1);
-    for (const [index, init] of manifest.initializers.filter(t => t.location).entries()) {
-      await checkpoint({ stage: 'resident-allocate', initializerName: init.name, length: init.bytes, gpuWeightAllocated: allocated,
-        gpuWeightUploaded: uploaded, gpuWeightBufferCount: index });
-      const buffer = device.createBuffer({ size: init.bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      buffers.push(buffer); allocated += init.bytes;
-      for (let offset = 0; offset < init.bytes; offset += scratch.byteLength) {
-        const chunkBytes = Math.min(scratch.byteLength, init.bytes - offset);
-        const range = { initializerName: init.name, destinationOffset: offset, chunkBytes, gpuWeightAllocated: allocated,
-          gpuWeightUploaded: uploaded, gpuWeightBufferCount: index + 1 };
-        await checkpoint({ stage: 'resident-write', ...range });
-        const writeStart = performance.now();
-        device.queue.writeBuffer(buffer, offset, scratch, 0, chunkBytes / 4);
-        const gpuWriteMs = performance.now() - writeStart;
-        await checkpoint({ stage: 'resident-wait', ...range, gpuWriteMs });
-        const waitStart = performance.now();
-        await device.queue.onSubmittedWorkDone();
-        const gpuWaitMs = performance.now() - waitStart;
-        if (lost) throw new Error(`Device lost: ${JSON.stringify(lost)}`);
-        uploaded += chunkBytes;
-        await checkpoint({ stage: 'resident-range-complete', ...range, gpuWeightUploaded: uploaded, gpuWriteMs, gpuWaitMs });
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error('WebGPU adapter unavailable');
+    const largest = manifest.largestInitializerBytes;
+    const device = await adapter.requestDevice({ requiredLimits: {
+      maxBufferSize: Math.max(268435456, largest), maxStorageBufferBindingSize: Math.max(134217728, largest),
+    } });
+    const buffers = [];
+    let allocated = 0, uploaded = 0, writeReturned = 0, lost, closed = false, lossSaved = Promise.resolve();
+    device.lost.then(info => {
+      if (closed && info.reason === 'destroyed') return;
+      lost = { reason: info.reason, message: info.message };
+      lossSaved = checkpoint({ stage: 'device-lost', info: lost, gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded });
+    });
+    device.addEventListener('uncapturederror', event => {
+      void checkpoint({ stage: 'gpu-uncaptured-error', ...errorDetails(event.error) });
+    });
+    device.pushErrorScope('out-of-memory');
+    device.pushErrorScope('validation');
+    let scopes = 2;
+    try {
+      await checkpoint({ stage: 'resident-start', expectedInitializerCount: manifest.initializers.filter(t => t.location).length,
+        expectedGpuResidentBytes: manifest.totalExternalTensorBytes });
+      const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { entryPoint: 'main', module: device.createShaderModule({ code: `
+        @group(0) @binding(0) var<storage, read> weights: array<f32>;
+        @group(0) @binding(1) var<storage, read_write> sums: array<f32>;
+        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+          var sum = 0.0;
+          for (var i = id.x; i < arrayLength(&weights); i += 64u) { sum += weights[i]; }
+          sums[id.x] = sum;
+        }` }) } });
+      const output = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+      const readback = device.createBuffer({ size: 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      buffers.push(output, readback);
+      const scratch = new Float32Array(stagingMiB * 2**20 / 4).fill(1);
+      for (const [index, init] of manifest.initializers.filter(t => t.location).entries()) {
+        await checkpoint({ stage: 'resident-allocate', initializerName: init.name, length: init.bytes, gpuWeightAllocated: allocated,
+          gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned, loadedInitializerCount: index, gpuWeightBufferCount: index });
+        const buffer = device.createBuffer({ size: init.bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        tracked.observeBuffer(device, buffer);
+        buffers.push(buffer); allocated += init.bytes;
+        for (let offset = 0; offset < init.bytes; offset += scratch.byteLength) {
+          const chunkBytes = Math.min(scratch.byteLength, init.bytes - offset);
+          const range = { initializerName: init.name, destinationOffset: offset, chunkBytes, gpuWeightAllocated: allocated,
+            gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned,
+            gpuWeightBufferCount: index + 1, loadedInitializerCount: index };
+          await checkpoint({ stage: 'resident-write', ...range });
+          const writeStart = performance.now();
+          device.queue.writeBuffer(buffer, offset, scratch, 0, chunkBytes / 4);
+          writeReturned += chunkBytes;
+          const gpuWriteMs = performance.now() - writeStart;
+          await checkpoint({ stage: 'resident-wait', ...range, gpuWriteMs, gpuWriteReturnedBytes: writeReturned,
+            operation: 'onSubmittedWorkDone', phase: 'before-call' });
+          const waitStart = performance.now();
+          await device.queue.onSubmittedWorkDone();
+          const gpuWaitMs = performance.now() - waitStart;
+          if (lost) throw new Error(`Device lost: ${JSON.stringify(lost)}`);
+          uploaded += chunkBytes;
+          await checkpoint({ stage: 'resident-range-complete', ...range, gpuWeightUploaded: uploaded,
+            gpuWriteReturnedBytes: writeReturned, gpuWriteMs, gpuWaitMs });
+        }
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
+          { binding: 0, resource: { buffer } }, { binding: 1, resource: { buffer: output } },
+        ] }));
+        pass.dispatchWorkgroups(1); pass.end();
+        encoder.copyBufferToBuffer(output, 0, readback, 0, 256);
+        await checkpoint({ stage: 'resident-compute', initializerName: init.name, gpuWeightAllocated: allocated,
+          gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned, loadedInitializerCount: index });
+        device.queue.submit([encoder.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        const sums = new Float32Array(readback.getMappedRange());
+        for (let lane = 0; lane < 64; lane++) {
+          if (sums[lane] !== Math.max(0, Math.ceil((init.bytes / 4 - lane) / 64))) throw new Error('Resident buffer readback mismatch');
+        }
+        readback.unmap();
+        await checkpoint({ stage: 'resident-complete', initializerName: init.name, loadedInitializerCount: index + 1,
+          gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned });
       }
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginComputePass();
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
-        { binding: 0, resource: { buffer } }, { binding: 1, resource: { buffer: output } },
-      ] }));
-      pass.dispatchWorkgroups(1); pass.end();
-      encoder.copyBufferToBuffer(output, 0, readback, 0, 256);
-      await checkpoint({ stage: 'resident-compute', initializerName: init.name, gpuWeightAllocated: allocated });
-      device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ);
-      const sums = new Float32Array(readback.getMappedRange());
-      for (let lane = 0; lane < 64; lane++) {
-        if (sums[lane] !== Math.max(0, Math.ceil((init.bytes / 4 - lane) / 64))) throw new Error('Resident buffer readback mismatch');
+      while (scopes) {
+        scopes--; const error = await device.popErrorScope();
+        if (error) { await checkpoint({ stage: 'gpu-error', operation: 'resident-error-scope', ...errorDetails(error) }); throw new Error(error.message); }
       }
-      readback.unmap();
-      await checkpoint({ stage: 'resident-complete', initializerName: init.name, loadedInitializerCount: index + 1, gpuWeightAllocated: allocated });
+      if (lost) throw new Error(`Device lost: ${JSON.stringify(lost)}`);
+      await tracked.flush();
+      if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
+      const count = manifest.initializers.filter(t => t.location).length;
+      return { gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned,
+        loadedInitializerCount: count, expectedInitializerCount: count, gpuValidatedInitializerCount: count,
+        gpuLedger: tracked.ledger, expectedBytes: manifest.totalExternalTensorBytes, allBytesUsed: true };
+    } finally {
+      while (scopes) { scopes--; await device.popErrorScope(); }
+      await lossSaved; closed = true;
+      for (const buffer of buffers) buffer.destroy();
+      device.destroy();
     }
-    while (scopes) {
-      scopes--; const error = await device.popErrorScope();
-      if (error) { await checkpoint({ stage: 'gpu-error', operation: 'resident-error-scope', ...errorDetails(error) }); throw new Error(error.message); }
-    }
-    if (lost) throw new Error(`Device lost: ${JSON.stringify(lost)}`);
-    return { gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded, expectedBytes: manifest.totalExternalTensorBytes, allBytesUsed: true };
-  } finally {
-    while (scopes) { scopes--; await device.popErrorScope(); }
-    await lossSaved; closed = true;
-    for (const buffer of buffers) buffer.destroy();
-    device.destroy();
-  }
+  } finally { await tracked.flush(); tracked.restore(); }
 }
 
 export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingMiB = 8) {
@@ -113,16 +142,19 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
       } });
     }
     store.finishPreparation();
+    await checkpoint({ stage: 'weights-prepared', storage: { ...store.metrics } });
     tracked = await installGpuTracking(manifest.largestInitializerBytes, record => {
-      if (['gpu-error', 'gpu-uncaptured-error'].includes(record.stage)) void checkpoint(record);
-    });
-    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuLedger: () => ({ ...tracked.ledger }) });
+      if (['gpu-error', 'gpu-uncaptured-error', 'device-lost'].includes(record.stage)) return checkpoint(record);
+    }, { context: () => ({ initializerName: loader?.last?.initializerName }) });
+    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuTracker: tracked });
     globalThis.__ortExternalTensorLoader = loader;
-    await checkpoint({ stage: 'runtime-create' });
+    await checkpoint({ stage: 'runtime-create', expectedInitializerCount: manifest.initializers.filter(t => t.location).length });
     const graph = Uint8Array.from(atob(FIXTURE.graph), c => c.charCodeAt(0));
     session = await ort.InferenceSession.create(graph, { executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled',
       enableCpuMemArena: false, enableMemPattern: false,
       externalData: manifest.files.map(file => ({ path: file.location, data: store.descriptor(file) })) });
+    await tracked.flush();
+    if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     loader.close(true); store.close();
     const reads = loader.metrics.rangeReadCount;
     for (let i = 0; i < 2; i++) {
@@ -143,6 +175,7 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
     }
     const idleElapsedMs = performance.now() - idleStart;
     await checkpoint({ stage: 'runtime-idle-complete', idleSeconds, idleElapsedMs });
+    await tracked.flush();
     if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     return { inferenceVerified: true, metrics: { ...loader.metrics }, storage: { ...store.metrics }, gpuLedger: { ...tracked.ledger },
       idleSeconds, idleElapsedMs, idleAcceptanceCompleted: idleSeconds >= 120 && idleElapsedMs >= 120000 };
@@ -151,7 +184,9 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
     if (loader && !loader.closed) loader.close(false);
     await loader?.lossSaved;
     await session?.release();
-    tracked?.restore(); tracked?.device?.destroy();
+    await tracked?.flush();
+    for (const gpuDevice of tracked?.devices || []) gpuDevice.destroy();
+    tracked?.restore();
   }
 }
 

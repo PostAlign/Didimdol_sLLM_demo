@@ -1,4 +1,4 @@
-import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity } from '../diagnostics.js';
+import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
 
 const $ = id => document.getElementById(id);
@@ -15,7 +15,17 @@ $('repeats').value = String(state.repeats || 1);
 function render() {
   $('rows').replaceChildren(...state.results.map(result => {
     const tr = document.createElement('tr');
-    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB`, result.interrupted ? '중단 (원인 미확인)' : result.success ? '성공' : result.cancelled ? '사용자 중단' : '실패',
+    const comparison = result.comparison || {}, storage = comparison.storage;
+    const mib = value => value == null ? '—' : (value / 2**20).toFixed(2);
+    const cache = storage ? `${storage.cacheHits}/${storage.totalFiles} · 이전 ${storage.migratedFiles} · 다운로드 ${storage.downloadedFiles}` : '—';
+    const location = [comparison.faultStage || comparison.stage, comparison.initializerName,
+      comparison.destinationOffset == null ? null : `${mib(comparison.destinationOffset)} MiB 위치`].filter(Boolean).join(' · ') || '—';
+    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB · ${result.mode || '—'}`,
+      result.interrupted ? '중단 (원인 미확인)' : result.success ? '성공' : result.cancelled ? '사용자 중단' : '실패',
+      result.reportedDevice || '미기록', (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
+      `${comparison.loadedInitializerCount ?? '—'} / ${comparison.expectedInitializerCount ?? '?'}`,
+      mib(comparison.gpuWeightAllocated), `${mib(comparison.gpuWriteReturnedBytes)} / ${mib(comparison.gpuQueueCompletedBytes)}`,
+      location, trackingLabel(comparison.trackingStatus),
       result.durationMs == null ? '—' : `${(result.durationMs / 1000).toFixed(1)}초`]) {
       const td = document.createElement('td'); td.textContent = value; tr.append(td);
     }
@@ -24,7 +34,8 @@ function render() {
 }
 if (state.active) {
   const diagnostic = await readRun(state.active.runId);
-  await recordRecovery(diagnostic, { visibility: document.visibilityState, experiment: state.active.kind });
+  const recovery = await recordRecovery(diagnostic, { visibility: document.visibilityState, experiment: state.active.kind,
+    lifecycle: state.active.lifecycle || [] });
   const kind = state.active.kind;
   const storage = diagnostic?.summary?.storage;
   const success = !diagnostic?.fault && ((kind === 'load' && diagnostic?.status === 'ready') ||
@@ -34,12 +45,22 @@ if (state.active) {
   const cancelled = diagnostic?.status === 'cancelled';
   const knownFailure = ['failed', 'device-lost'].includes(diagnostic?.status) || !!diagnostic?.fault ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && !success);
-  state.results.push({ ...state.active, success, cancelled, interrupted: !success && !cancelled && !knownFailure });
+  state.results.push({ ...state.active, success, cancelled, interrupted: !success && !cancelled && !knownFailure,
+    comparison: diagnosticSummary(diagnostic && { ...diagnostic, recovery }, state.active.sessionResult) });
   $('last').textContent = JSON.stringify(diagnostic, null, 2);
   $('status').textContent = success ? '이전 실험 완료 기록을 복구했습니다.' : '이전 실험 기록을 복구했습니다. 진단 JSON을 저장해 주세요.';
   state.active = null; state.continue = null; save();
 }
 render();
+for (const eventName of ['pagehide', 'pageshow', 'visibilitychange']) {
+  addEventListener(eventName, event => {
+    if (!state.active) return;
+    state.active.lifecycle ||= [];
+    state.active.lifecycle.push({ event: eventName, visibility: document.visibilityState, persisted: event.persisted,
+      runId: state.active.runId, timestamp: Date.now() });
+    state.active.lifecycle = state.active.lifecycle.slice(-32); save();
+  });
+}
 function reloadFor(config) {
   state.continue = config; save();
   const url = new URL(location.href); url.searchParams.set('next', '1'); location.replace(url);
@@ -68,7 +89,7 @@ async function finish(result) {
   const diagnostic = await readRun(active.runId);
   if (diagnostic?.fault && !result.cancelled) { result.success = false; result.error ||= diagnostic.fault.message || diagnostic.fault.stage; }
   state.results.push({ ...active, ...result, releaseId: diagnostic?.environment?.build?.releaseId || active.releaseId,
-    durationMs: Date.now() - active.startedAt, sessionResult });
+    durationMs: Date.now() - active.startedAt, sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
   if (state.results.length > 30) state.results.shift();
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;
@@ -131,7 +152,7 @@ async function begin(config) {
       $('last').textContent = JSON.stringify(data.record, null, 2);
       if (data.record.stage === 'device-lost') await finish({ success: false, error: 'GPU device lost' });
     }
-    if (data.type === 'session-result') sessionResult = data.result;
+    if (data.type === 'session-result') { sessionResult = data.result; state.active.sessionResult = sessionResult; save(); }
     if (data.type === 'ready') {
       if (config.kind === 'probe') nextRun('probe');
       else if (config.kind === 'evaluation') nextRun('run');

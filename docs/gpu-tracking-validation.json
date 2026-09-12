@@ -1,0 +1,407 @@
+{
+  "recordedAt": "2026-09-12T05:47:03.750311+00:00",
+  "environment": {
+    "platform": "Linux/WSL",
+    "browser": "Playwright Chromium",
+    "gpu": "SwiftShader",
+    "iphoneTested": false
+  },
+  "releaseId": "18721d3cc314c1755cc74e3b93497c7c49928cea19f11d78c5de43e10a5eb789",
+  "provenance": {
+    "appCommit": "d4aec375b20d4da7061bc5273efaa7b9b605a1ee",
+    "appDirty": true,
+    "nodeVersion": "v22.22.1"
+  },
+  "nativeBuildRecompiled": false,
+  "unitTests": {
+    "command": "npm test",
+    "passed": 30,
+    "failed": 0
+  },
+  "releaseVerification": {
+    "command": "npm run verify:release",
+    "verifiedAssets": 62,
+    "passed": true
+  },
+  "currentReleaseChecks": {
+    "modelAndRuntime": {
+      "command": "ORT_MODES=asyncify TEST_APP_LOAD=1 npm run test:browser",
+      "scope": "Model/runtime checks passed. The subsequent allocation-error test fixture initially produced a synchronous RangeError; its asynchronous-validation fixture was corrected and retested separately below.",
+      "results": [
+        {
+          "id": "smoke-asyncify",
+          "success": true,
+          "releaseId": "18721d3cc314c1755cc74e3b93497c7c49928cea19f11d78c5de43e10a5eb789",
+          "stagingMiB": 8,
+          "sessionCreateMs": 509.5,
+          "inferenceVerified": true,
+          "metrics": {
+            "loadedInitializerCount": 2,
+            "gpuWeightAllocated": 10496000,
+            "gpuWriteReturnedBytes": 10496000,
+            "gpuQueueCompletedBytes": 10496000,
+            "gpuValidatedInitializerCount": 2,
+            "cpuStagingPeak": 8388608,
+            "wasmHeapPeak": 16777216
+          },
+          "gpuTracking": {
+            "tracking": {
+              "status": "complete",
+              "reasons": [],
+              "activeDeviceId": 1,
+              "deviceCount": 1,
+              "pendingChecks": 0,
+              "devices": [
+                {
+                  "id": 1,
+                  "fullHistory": true,
+                  "current": 10496000,
+                  "live": 2,
+                  "destroyed": false
+                }
+              ]
+            },
+            "bufferCount": 2,
+            "requestedCurrent": 10496000,
+            "requestedPeak": 10496000,
+            "mappedUploadRequested": 0,
+            "firstError": null,
+            "lastError": null
+          }
+        },
+        {
+          "id": "resident-asyncify",
+          "success": true,
+          "releaseId": "18721d3cc314c1755cc74e3b93497c7c49928cea19f11d78c5de43e10a5eb789",
+          "stagingMiB": 4,
+          "durationMs": 66,
+          "gpuTracking": {
+            "tracking": {
+              "status": "complete",
+              "reasons": [],
+              "activeDeviceId": 1,
+              "deviceCount": 1,
+              "pendingChecks": 0,
+              "devices": [
+                {
+                  "id": 1,
+                  "fullHistory": true,
+                  "current": 10496512,
+                  "live": 4,
+                  "destroyed": false
+                }
+              ]
+            },
+            "bufferCount": 4,
+            "requestedCurrent": 10496512,
+            "requestedPeak": 10496512,
+            "mappedUploadRequested": 0,
+            "firstError": null,
+            "lastError": null
+          }
+        },
+        {
+          "id": "runtime-asyncify",
+          "success": true,
+          "releaseId": "18721d3cc314c1755cc74e3b93497c7c49928cea19f11d78c5de43e10a5eb789",
+          "stagingMiB": 4,
+          "durationMs": 1082.5,
+          "inferenceVerified": true,
+          "idleSeconds": 0,
+          "idleElapsedMs": 0,
+          "idleAcceptanceCompleted": false,
+          "metrics": {
+            "loadedInitializerCount": 2,
+            "gpuWeightAllocated": 10496000,
+            "gpuWriteReturnedBytes": 10496000,
+            "gpuQueueCompletedBytes": 10496000,
+            "gpuValidatedInitializerCount": 2,
+            "cpuStagingPeak": 4194304,
+            "wasmHeapPeak": 16777216
+          },
+          "gpuTracking": {
+            "tracking": {
+              "status": "complete",
+              "reasons": [],
+              "activeDeviceId": 1,
+              "deviceCount": 1,
+              "pendingChecks": 0,
+              "devices": [
+                {
+                  "id": 1,
+                  "fullHistory": true,
+                  "current": 10532992,
+                  "live": 7,
+                  "destroyed": false
+                }
+              ]
+            },
+            "bufferCount": 11,
+            "requestedCurrent": 10532992,
+            "requestedPeak": 10543232,
+            "mappedUploadRequested": 8192,
+            "firstError": null,
+            "lastError": null
+          }
+        },
+        {
+          "id": "app-from-pretrained",
+          "success": true,
+          "stagingMiB": 2,
+          "durationMs": 9755.200000017881,
+          "cleanupVerified": true,
+          "outputs": [
+            {
+              "row": 3,
+              "promptLen": 35,
+              "durationMs": 13837.100000023842,
+              "tokens": [
+                238789,
+                236764
+              ]
+            },
+            {
+              "row": 95,
+              "promptLen": 266,
+              "durationMs": 31155.90000000596,
+              "tokens": [
+                238789,
+                236764
+              ]
+            }
+          ],
+          "metrics": {
+            "loadedInitializerCount": 251,
+            "gpuWeightAllocated": 1072392704,
+            "gpuWriteReturnedBytes": 1072392704,
+            "gpuQueueCompletedBytes": 1072392704,
+            "gpuValidatedInitializerCount": 251,
+            "cpuStagingPeak": 2097152,
+            "wasmHeapPeak": 24248320
+          },
+          "gpuTracking": {
+            "tracking": {
+              "status": "complete",
+              "reasons": [],
+              "activeDeviceId": 1,
+              "deviceCount": 1,
+              "pendingChecks": 0,
+              "devices": [
+                {
+                  "id": 1,
+                  "fullHistory": true,
+                  "current": 1159892192,
+                  "live": 1049,
+                  "destroyed": false
+                }
+              ]
+            },
+            "bufferCount": 1863,
+            "requestedCurrent": 1159892192,
+            "requestedPeak": 1160940768,
+            "mappedUploadRequested": 6661760,
+            "firstError": null,
+            "lastError": null
+          }
+        }
+      ]
+    },
+    "gpuErrorsAndUI": {
+      "command": "ORT_MODES= npm run test:browser",
+      "exitCode": 0,
+      "results": [
+        {
+          "id": "gpu-tracking-browser",
+          "success": true,
+          "lateBindingVerified": true,
+          "allocationErrorVerified": true
+        },
+        {
+          "id": "diagnostic-ui",
+          "success": true,
+          "tabIsolation": true,
+          "recoveryVerified": true,
+          "stopExportVerified": true
+        }
+      ]
+    }
+  },
+  "earlierComplementaryChecks": {
+    "releaseId": "7c3f2ae7c274abe56a907c598c19adeda36fb24b9cf62001a25aae1af9889c7f",
+    "scope": "JSPI/stock and both complete 120-second idle observations before the final diagnostic-only refinements.",
+    "results": [
+      {
+        "id": "runtime-asyncify",
+        "success": true,
+        "releaseId": "7c3f2ae7c274abe56a907c598c19adeda36fb24b9cf62001a25aae1af9889c7f",
+        "stagingMiB": 4,
+        "durationMs": 121978.40000000596,
+        "inferenceVerified": true,
+        "idleSeconds": 120,
+        "idleElapsedMs": 120809.29999998212,
+        "idleAcceptanceCompleted": true,
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuWriteReturnedBytes": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "gpuValidatedInitializerCount": 2,
+          "cpuStagingPeak": 4194304,
+          "wasmHeapPeak": 16777216
+        },
+        "gpuTracking": {
+          "tracking": {
+            "status": "complete",
+            "reasons": [],
+            "activeDeviceId": 1,
+            "deviceCount": 1,
+            "pendingChecks": 0,
+            "devices": [
+              {
+                "id": 1,
+                "fullHistory": true,
+                "current": 10532992,
+                "live": 7,
+                "destroyed": false
+              }
+            ]
+          },
+          "bufferCount": 11,
+          "requestedCurrent": 10532992,
+          "requestedPeak": 10543232,
+          "mappedUploadRequested": 8192,
+          "firstError": null,
+          "lastError": null
+        }
+      },
+      {
+        "id": "smoke-jspi",
+        "success": true,
+        "releaseId": "7c3f2ae7c274abe56a907c598c19adeda36fb24b9cf62001a25aae1af9889c7f",
+        "stagingMiB": 8,
+        "sessionCreateMs": 350.7999999821186,
+        "inferenceVerified": true,
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuWriteReturnedBytes": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "gpuValidatedInitializerCount": 2,
+          "cpuStagingPeak": 8388608,
+          "wasmHeapPeak": 16777216
+        },
+        "gpuTracking": {
+          "tracking": {
+            "status": "complete",
+            "reasons": [],
+            "activeDeviceId": 1,
+            "deviceCount": 1,
+            "pendingChecks": 0,
+            "devices": [
+              {
+                "id": 1,
+                "fullHistory": true,
+                "current": 10496000,
+                "live": 2,
+                "destroyed": false
+              }
+            ]
+          },
+          "bufferCount": 2,
+          "requestedCurrent": 10496000,
+          "requestedPeak": 10496000,
+          "mappedUploadRequested": 0,
+          "firstError": null,
+          "lastError": null
+        }
+      },
+      {
+        "id": "runtime-jspi",
+        "success": true,
+        "releaseId": "7c3f2ae7c274abe56a907c598c19adeda36fb24b9cf62001a25aae1af9889c7f",
+        "stagingMiB": 4,
+        "durationMs": 121476.79999998212,
+        "inferenceVerified": true,
+        "idleSeconds": 120,
+        "idleElapsedMs": 120573,
+        "idleAcceptanceCompleted": true,
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuWriteReturnedBytes": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "gpuValidatedInitializerCount": 2,
+          "cpuStagingPeak": 4194304,
+          "wasmHeapPeak": 16777216
+        },
+        "gpuTracking": {
+          "tracking": {
+            "status": "complete",
+            "reasons": [],
+            "activeDeviceId": 1,
+            "deviceCount": 1,
+            "pendingChecks": 0,
+            "devices": [
+              {
+                "id": 1,
+                "fullHistory": true,
+                "current": 10532992,
+                "live": 7,
+                "destroyed": false
+              }
+            ]
+          },
+          "bufferCount": 11,
+          "requestedCurrent": 10532992,
+          "requestedPeak": 10543232,
+          "mappedUploadRequested": 8192,
+          "firstError": null,
+          "lastError": null
+        }
+      },
+      {
+        "id": "smoke-stock",
+        "success": true,
+        "releaseId": "7c3f2ae7c274abe56a907c598c19adeda36fb24b9cf62001a25aae1af9889c7f",
+        "stagingMiB": 8,
+        "sessionCreateMs": 533.3000000119209,
+        "inferenceVerified": true,
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "cpuStagingPeak": 10485760,
+          "wasmHeapPeak": null
+        },
+        "gpuTracking": {
+          "tracking": {
+            "status": "complete",
+            "reasons": [],
+            "activeDeviceId": 1,
+            "deviceCount": 1,
+            "pendingChecks": 0,
+            "devices": [
+              {
+                "id": 1,
+                "fullHistory": true,
+                "current": 10496000,
+                "live": 2,
+                "destroyed": false
+              }
+            ]
+          },
+          "bufferCount": 4,
+          "requestedCurrent": 10496000,
+          "requestedPeak": 20971520,
+          "mappedUploadRequested": 10496000,
+          "firstError": null,
+          "lastError": null
+        }
+      }
+    ]
+  },
+  "limitations": [
+    "No iPhone restart/OOM resolution claim; target-device runs and system logs remain necessary.",
+    "Full-model tests use unchanged local model files and an 8 GiB incognito storage quota override.",
+    "The default 8 MiB staging and FP32 GPU weight residency remain unchanged; phone evidence is required to choose memory mitigations.",
+    "No deployment was performed."
+  ]
+}

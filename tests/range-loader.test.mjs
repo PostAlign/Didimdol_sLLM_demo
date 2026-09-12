@@ -74,6 +74,9 @@ test('CPU fallback guard and GPU errors fail explicitly and release staging', as
   let first = true;
   f.request.gpu.device.popErrorScope = async () => first ? (first = false, { message: 'validation failure' }) : null;
   await assert.rejects(f.loader.load(f.request), /validation failure/);
+  assert.equal(f.loader.metrics.gpuQueueCompletedBytes, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuValidatedInitializerCount, 0, 'a completed queue does not imply valid upload scopes');
+  assert.equal(f.loader.metrics.loadedInitializerCount, 0);
   assert.equal(f.loader.close(false).cpuStagingCurrent, 0);
 });
 
@@ -156,9 +159,15 @@ test('upload completion excludes pending writes and GPU timings exclude checkpoi
   await firstWait;
   assert.equal(f.loader.metrics.gpuWeightAllocated, 10 * 2**20);
   assert.equal(f.loader.metrics.gpuWeightUploaded, 0);
+  assert.equal(f.loader.metrics.gpuWriteReturnedBytes, 8 * 2**20);
+  assert.equal(f.loader.metrics.gpuQueueCompletedBytes, 0);
+  assert.equal(f.loader.metrics.gpuValidatedInitializerCount, 0);
   assert.equal(f.writes.length, 1);
   release(); await loading;
   assert.equal(f.loader.metrics.gpuWeightUploaded, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuWriteReturnedBytes, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuQueueCompletedBytes, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuValidatedInitializerCount, 1);
   assert.equal(f.loader.metrics.gpuWriteMs, 6);
   assert.equal(f.loader.metrics.gpuWaitMs, 14);
   assert.equal(f.loader.metrics.gpuWaitPeakMs, 7);
@@ -175,6 +184,8 @@ test('queue errors are persisted with their operation before cleanup can fail', 
   assert.equal(fault.operation, 'onSubmittedWorkDone');
   assert.equal(fault.message, 'queue rejected');
   assert.equal(fault.metrics.gpuWeightUploaded, 0);
+  assert.equal(fault.metrics.gpuWriteReturnedBytes, 16);
+  assert.equal(fault.metrics.gpuQueueCompletedBytes, 0);
   assert.equal(f.loader.busy, false);
   f.loader.close(false);
 });

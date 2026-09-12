@@ -218,3 +218,51 @@ Relevant upstream investigations: [WebKit WASM compilation memory](https://bugs.
 [WebGPU submission pressure](https://bugs.webkit.org/show_bug.cgi?id=311598),
 [WebKit OPFS](https://webkit.org/blog/12257/the-file-system-access-api-with-origin-private-file-system/).
 They motivate the probes and do not prove the cause of the reported phone restart.
+
+### GPU tracking and interruption follow-up
+
+The worker now observes `GPUAdapter.requestDevice`, `GPUDevice.createBuffer` and
+explicit buffer/device destruction through prototypes, with instance fallbacks.
+The range bridge also registers the device/buffer actually supplied by native ORT.
+This preserves ORT's native device-creation path and the synchronous `createBuffer`
+API. Hooks remain installed during inference and are restored when the worker
+finishes or fails. Multiple devices have separate identities in the ledger.
+
+`gpuLedger.tracking.status` is `complete`, `partial`, or `unbound`. Late bridge
+registration counts the buffers actually observed, but leaves historical
+`requestedPeak` and `mappedUploadRequested` unknown (`null`). `observedPeak` is
+only the largest observed request total, not a reconstruction of earlier memory
+use. Explicit `destroy()` updates logical live counts; physical reclamation is
+not measured. Old schema-3 exports with nonzero weights and a zero ledger are
+shown as partial, and absent schema-2 counters remain unknown.
+
+Allocation error scopes are pushed before `createBuffer` and popped immediately
+after its synchronous call. Their asynchronous results preserve allocation-time
+initializer context; pending fault writes are drained before uploading weights.
+These extra scope operations have a cost that must be compared on the phone.
+Upload scopes still validate each initializer independently.
+
+Range metrics distinguish `gpuWriteReturnedBytes`, `gpuQueueCompletedBytes` and
+`gpuValidatedInitializerCount`. `gpuWeightUploaded` remains a compatible alias for
+queue-completed bytes. A `gpu-wait` checkpoint has `phase: "before-call"`: it
+follows a returned write but precedes the queue wait. An interrupted final
+checkpoint cannot prove the exact native crash instruction or an OOM.
+
+Recovery retains raw lifecycle hints in `lifecycleHistory`; `lifecycle` only
+contains events inside the run interval with a matching UUID when available.
+The original worker status and fault are preserved. The UI shows interrupted
+runs and their tracking coverage, and experiment rows/export include release,
+reported device, runtime/staging, OPFS cache/migration/download counts, completed
+initializers, weight requests, returned/completed transfers and the last position.
+
+Phone validation order for this follow-up:
+
+1. Use one immutable release and record the device/browser and inspector setting.
+2. Run resident-only, then the small runtime with the full 120-second idle period.
+3. Run the full model from verified OPFS cache at 8, 4 and 2 MiB staging, keeping
+   other settings constant. Compare cumulative allocated bytes as well as the
+   last initializer: native initializer order can differ between runs.
+4. Repeat a successful setting with five cached loads and short/long input probes.
+5. Correlate any interruption with device crash/Jetsam logs. Smaller staging does
+   not reduce the approximately 1,023 MiB FP32 weight residency. Default staging
+   or model residency changes require those device results.

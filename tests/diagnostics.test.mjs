@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, recoveryEvidence, diagnosticSummary } from '../web/sllm/diagnostics.js';
 
 test('evicting recent events preserves preparation, allocation order and the original fault', async () => {
   let saved;
@@ -22,6 +22,53 @@ test('evicting recent events preserves preparation, allocation order and the ori
   assert.equal(saved.fault.stage, 'device-lost');
   assert.equal(saved.status, 'device-lost');
   assert.equal(saved.persistence.completed, saved.recordCount - 1);
+});
+
+test('recovery associates lifecycle with the run interval and UUID without rewriting the worker', () => {
+  const run = { runId: 'current', startedAt: 100, status: 'running', last: { stage: 'gpu-wait', timestamp: 120 } };
+  const lifecycle = [
+    { event: 'pagehide', timestamp: 96 },
+    { event: 'visibilitychange', timestamp: 105, runId: 'another-run' },
+    { event: 'pagehide', timestamp: 122, runId: 'current' },
+    { event: 'pageshow', timestamp: 131, runId: 'current' },
+  ];
+  const recovery = recoveryEvidence(run, { lifecycle }, 130);
+  assert.deepEqual(recovery.lifecycle, [lifecycle[2]]);
+  assert.deepEqual(recovery.lifecycleHistory, lifecycle);
+  assert.equal(recovery.cause, 'unknown');
+  assert.equal(run.status, 'running');
+  assert.equal(diagnosticSummary({ ...run, recovery }).effectiveStatus, 'interrupted');
+  assert.deepEqual(recoveryEvidence({ ...run, startedAt: undefined }, { lifecycle }, 130).lifecycle, []);
+});
+
+test('old zero GPU ledgers are partial and missing measurements remain unknown', () => {
+  const run = { status: 'running', recovery: { classification: 'interrupted' }, last: {
+    stage: 'gpu-wait', initializerName: 'embed_tokens.chunk0', destinationOffset: 24 * 2**20,
+    metrics: { gpuWeightAllocated: 922290176, gpuWeightUploaded: 905512960, loadedInitializerCount: 214 },
+    gpuLedger: { requestedCurrent: 0, requestedPeak: 0, bufferCount: 0 },
+  } };
+  const summary = diagnosticSummary(run);
+  assert.equal(summary.trackingStatus, 'partial');
+  assert.equal(summary.gpuQueueCompletedBytes, 905512960);
+  assert.equal(summary.gpuWriteReturnedBytes, null);
+  assert.equal(summary.gpuValidatedInitializerCount, null);
+  assert.equal(summary.destinationOffset, 24 * 2**20);
+  assert.equal(diagnosticSummary({ schemaVersion: 2, last: {} }).trackingStatus, 'unknown');
+  assert.equal(diagnosticSummary({ schemaVersion: 2, last: {} }).gpuWeightAllocated, null);
+});
+
+test('fault/stop summaries retain progress and cache facts after a terminal record', () => {
+  const run = { status: 'failed', fault: { stage: 'gpu-error', initializerName: 'failed-weight' },
+    last: { stage: 'failed' }, summary: { error: 'error' },
+    milestones: { 'weights-prepared': { storage: { cacheHits: 9, totalFiles: 9 } } },
+    records: [{ stage: 'gpu-wait', initializerName: 'failed-weight', destinationOffset: 8,
+      metrics: { gpuWeightAllocated: 40, loadedInitializerCount: 1 }, gpuLedger: { tracking: { status: 'complete' } } }] };
+  const summary = diagnosticSummary(run);
+  assert.equal(summary.gpuWeightAllocated, 40);
+  assert.equal(summary.loadedInitializerCount, 1);
+  assert.equal(summary.initializerName, 'failed-weight');
+  assert.equal(summary.trackingStatus, 'complete');
+  assert.equal(summary.storage.cacheHits, 9);
 });
 
 test('failed persistence does not break later checkpoints, and queued records are snapshots', async () => {

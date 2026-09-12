@@ -54,6 +54,12 @@ try {
       assert.equal(result.metrics.loadedInitializerCount, 2);
       assert.ok(result.metrics.cpuStagingPeak <= 16 * 2**20);
       assert.equal(result.sessionGpuLedger.mappedUploadRequested, 0, 'no full-tensor mapped GPU staging');
+      assert.equal(result.sessionGpuLedger.tracking.status, 'complete', 'bind actual ORT device allocations');
+      assert.ok(result.sessionGpuLedger.bufferCount >= result.metrics.gpuWeightBufferCount);
+      assert.ok(result.sessionGpuLedger.requestedCurrent >= result.metrics.gpuWeightAllocated);
+      assert.equal(result.metrics.gpuWriteReturnedBytes, result.metrics.totalExternalTensorBytes);
+      assert.equal(result.metrics.gpuQueueCompletedBytes, result.metrics.totalExternalTensorBytes);
+      assert.equal(result.metrics.gpuValidatedInitializerCount, 2);
       assert.equal(result.storage.peakOpenHandles, 1);
       assert.equal(result.storage.openHandles, 0);
       for (const kind of (mode === 'asyncify' ? ['resident', 'runtime'] : ['runtime'])) {
@@ -149,6 +155,7 @@ try {
     assert.deepEqual(result.outputs.map(output => output.tokens), [[238789, 236764], [238789, 236764]], 'recorded FP32 real-prompt baseline');
     assert.equal(result.metrics.loadedInitializerCount, 251);
     assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
+    assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
     await page.close();
   }
   if (process.env.TEST_FULL_MODEL === '1') {
@@ -213,6 +220,44 @@ try {
   const recoveryContext = await browser.newContext();
   const page = await recoveryContext.newPage();
   await page.goto(origin);
+  // Exercise real WebGPU validation errors and late binding through cached native
+  // methods, which bypass interception in the same way a missed wrapper can.
+  const gpuTracking = await page.evaluate(async origin => {
+    const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+    const { installGpuTracking } = await import(asset('web/sllm/gpu-device.js'));
+    const adapter = await navigator.gpu.requestAdapter();
+    const request = adapter.requestDevice, create = GPUDevice.prototype.createBuffer;
+    let current = 'allocation-under-test';
+    const faults = [];
+    const tracked = await installGpuTracking(16, record => {
+      if (record.stage === 'gpu-error') faults.push(record);
+    }, { context: () => ({ initializerName: current }) });
+    try {
+      const device = await request.call(adapter);
+      const buffer = create.call(device, { size: 16, usage: GPUBufferUsage.COPY_DST });
+      tracked.observeBuffer(device, buffer); tracked.observeBuffer(device, buffer);
+      const bound = tracked.ledger;
+      const invalid = device.createBuffer({ size: 16, usage: 0 });
+      const synchronous = invalid instanceof GPUBuffer;
+      current = 'later-operation';
+      await tracked.flush();
+      const error = tracked.ledger.firstError;
+      device.destroy(); buffer.destroy();
+      await tracked.flush();
+      return { bound, synchronous, error, faults, remaining: tracked.ledger.requestedCurrent };
+    } finally { tracked.restore(); }
+  }, origin);
+  assert.equal(gpuTracking.bound.tracking.status, 'partial');
+  assert.equal(gpuTracking.bound.requestedCurrent, 16);
+  assert.equal(gpuTracking.bound.bufferCount, 1);
+  assert.equal(gpuTracking.bound.requestedPeak, null);
+  assert.equal(gpuTracking.synchronous, true);
+  assert.equal(gpuTracking.error.errorType, 'GPUValidationError');
+  assert.equal(gpuTracking.error.initializerName, 'allocation-under-test');
+  assert.equal(gpuTracking.error.operation, 'createBuffer');
+  assert.equal(gpuTracking.faults.length, 1);
+  assert.equal(gpuTracking.remaining, 0);
+  results.push({ id: 'gpu-tracking-browser', success: true, lateBindingVerified: true, allocationErrorVerified: true });
   await page.evaluate(async origin => {
     const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
     await new Promise((resolve, reject) => {
@@ -236,19 +281,30 @@ try {
       last: { stage: 'gpu-wait', initializerName: 'legacy-weight' }, records: [] }, runKey('legacy-test'));
     const run = new RunDiagnostics('reload-test');
     await run.checkpoint({ stage: 'gpu-wait', initializerName: 'test-weight',
-      metrics: { gpuWeightAllocated: 123456, loadedInitializerCount: 1 } });
+      metrics: { gpuWeightAllocated: 123456, loadedInitializerCount: 1 },
+      gpuLedger: { requestedCurrent: 0, bufferCount: 0 } });
+    sessionStorage.setItem('didimdol.testLifecycle', JSON.stringify([{ event: 'pagehide', timestamp: run.state.startedAt - 4162 }]));
     sessionStorage.setItem('didimdol.activeRun.v2', JSON.stringify({ runId: 'reload-test', device: 'webgpu', phase: 'load', t: Date.now() }));
     sessionStorage.setItem('didimdol.runHistory.v2', JSON.stringify(['reload-test']));
+  });
+  await page.addInitScript(() => {
+    // Seed before the next app boot: the outgoing page owns an in-memory
+    // lifecycle list and correctly writes it again during pagehide.
+    const seed = sessionStorage.getItem('didimdol.testLifecycle');
+    if (seed) { sessionStorage.setItem('didimdol.lifecycle.v2', seed); sessionStorage.removeItem('didimdol.testLifecycle'); }
   });
   await page.reload();
   await page.locator('#rows').getByText(/gpu-wait/).waitFor();
   assert.match(await page.locator('#rows').innerText(), /메모리 부족은 아직 확인되지 않았습니다/);
+  assert.match(await page.locator('#rows').innerText(), /GPU 계측 부분 관측/);
   const recovery = await page.evaluate(async () => {
     const { readRun, recordRecovery } = await import('/web/sllm/diagnostics.js');
     await recordRecovery(await readRun('legacy-test'));
     return { current: await readRun('reload-test'), legacy: await readRun('legacy-test') };
   });
   assert.equal(recovery.current.recovery.cause, 'unknown');
+  assert.ok(recovery.current.recovery.lifecycle.every(event => event.timestamp >= recovery.current.startedAt));
+  assert.ok(recovery.current.recovery.lifecycleHistory.some(event => event.timestamp < recovery.current.startedAt));
   assert.equal(recovery.current.last.stage, 'gpu-wait');
   assert.equal(recovery.legacy.schemaVersion, 2);
   assert.equal(recovery.legacy.last.initializerName, 'legacy-weight');
@@ -304,6 +360,10 @@ try {
   const download = await downloadReady;
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'));
   assert.equal(exported.results.at(-1).cancelled, true);
+  assert.equal(exported.results.at(-1).comparison.trackingStatus, 'complete');
+  assert.equal(exported.results.at(-1).comparison.gpuWeightAllocated, 10496000);
+  assert.equal(exported.results.at(-1).comparison.storage.downloadedFiles, 1);
+  assert.match(await page.locator('#rows').innerText(), /정상/);
   assert.equal(exported.runs.find(run => run.runId === exported.results.at(-1).runId).status, 'cancelled');
   const interrupted = exported.runs.find(run => run.runId === 'experiment-interrupted');
   assert.equal(interrupted.status, 'running');

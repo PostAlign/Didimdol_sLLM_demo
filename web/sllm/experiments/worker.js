@@ -99,6 +99,7 @@ self.onmessage = async ({ data: config }) => {
     tracked = await installGpuTracking(manifest.largestInitializerBytes);
     if (mode !== 'stock') {
       loader = new SessionRangeLoader({ manifest, stagingMiB: config.experiment.stagingMiB,
+        gpuTracker: tracked,
         checkpoint: record => saveCheckpoint({ ...record, experiment: result.id }, `experiment-${result.id}`),
         emit: record => {
           if (record.initializerName) result.lastInitializer = record.initializerName;
@@ -118,6 +119,8 @@ self.onmessage = async ({ data: config }) => {
     result.sessionCreateMs = performance.now() - start;
     const drainStart = performance.now();
     await tracked.device.queue.onSubmittedWorkDone();
+    await tracked.flush();
+    if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     result.uploadDrainMs = performance.now() - drainStart;
     result.metrics = loader?.close(true) || stockMetrics;
     store?.close();
@@ -170,10 +173,11 @@ self.onmessage = async ({ data: config }) => {
     if (loader && !loader.closed) result.metrics = loader.close(false);
   } finally {
     store?.close();
-    tracked?.restore();
+    await tracked?.flush();
     if (tracked) result.gpuLedger = { ...tracked.ledger };
     if (session) await session.release();
-    tracked?.device?.destroy();
+    for (const gpuDevice of tracked?.devices || []) gpuDevice.destroy();
+    tracked?.restore();
     result.completedAt = Date.now();
     await saveCheckpoint(result, `experiment-${result.id}`);
     self.postMessage({ type: 'result', result });

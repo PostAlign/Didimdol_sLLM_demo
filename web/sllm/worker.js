@@ -5,7 +5,7 @@ const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || '
 const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
-import { RunDiagnostics, newRunId, buildIdentity } from './diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext } from './diagnostics.js';
 import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 
@@ -168,14 +168,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
   const externalData = await mountWeights(manifest);
   const tracked = trackedGpu = await installGpuTracking(manifest.largestInitializerBytes, record => {
     if (trace) console.info('[GPU]', record);
-    if (['gpu-uncaptured-error', 'gpu-error'].includes(record.stage)) void journal.checkpoint({
-      initializerName: journal.state.last?.initializerName, observedDuring: journal.state.last?.stage, ...record,
+    if (['gpu-uncaptured-error', 'gpu-error', 'device-lost'].includes(record.stage)) return journal.checkpoint({
+      ...record,
       gpuLedger: trackedGpu ? { ...trackedGpu.ledger } : null });
-  });
+  }, { context: () => gpuOperationContext(journal.state.last) });
   const started = performance.now();
   const loader = new SessionRangeLoader({
     manifest, stagingMiB, signal: loadController.signal,
-    gpuLedger: () => ({ ...tracked.ledger }),
+    gpuTracker: tracked,
     checkpoint: record => journal.checkpoint(record),
     emit: record => {
       if (trace) console.info(`[${record.stage.startsWith('gpu') ? 'GPU' : record.stage.startsWith('wasm') ? 'WASM' :
@@ -197,11 +197,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
         executionProviders: ['webgpu'],
         enableCpuMemArena: false, enableMemPattern: false },
     });
+    await tracked.flush();
+    if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     if (loader.metrics.loadedInitializerCount !== manifest.initializers.filter(t => t.location).length) throw new Error('Incomplete external initializer load');
     loadController.signal.throwIfAborted();
     success = true;
   } finally {
-    tracked.restore();
+    await tracked.flush();
+    if (!success) tracked.restore();
     await loader.lossSaved;
     const metrics = loader.close(success);
     weightStore.close();
@@ -229,6 +232,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
   rouge1 = makeRouge1(tokenizer);
 
   loadController.signal.throwIfAborted();
+  await tracked.flush();
   if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
   device = 'webgpu';
   await journal.finish('ready', sessionMetrics);
@@ -246,6 +250,7 @@ async function generateOwned(inputs, options) {
 async function recordMemory(stage, details = {}) {
   const loader = globalThis.__ortExternalTensorLoader;
   await trackedGpu.device.queue.onSubmittedWorkDone();
+  await trackedGpu.flush();
   if (trackedGpu.ledger.lastError) throw new Error(`WebGPU: ${trackedGpu.ledger.lastError}`);
   if (loader.metrics.rangeReadCount !== sessionMetrics.metrics.rangeReadCount) throw new Error('Weights reloaded during inference');
   await journal.checkpoint({ stage, ...details, metrics: loader.sampleMetrics(), gpuLedger: { ...trackedGpu.ledger } });
@@ -392,11 +397,13 @@ self.onmessage = async ({ data }) => {
     operation = 'dispose';
     try {
       await model?.dispose(); model = null;
-      await trackedGpu?.device?.queue.onSubmittedWorkDone();
-      trackedGpu?.device?.destroy();
+      for (const gpuDevice of trackedGpu?.devices || []) await gpuDevice.queue.onSubmittedWorkDone();
+      await trackedGpu?.flush();
+      for (const gpuDevice of trackedGpu?.devices || []) gpuDevice.destroy();
+      trackedGpu?.restore();
       post({ type: 'disposed' });
     } catch (error) { post({ type: 'disposed', error: String(error) }); }
-    finally { operation = null; }
+    finally { trackedGpu?.restore(); operation = null; }
     return;
   }
   if (!['load', 'run', 'probe'].includes(data.type)) return;
@@ -426,6 +433,8 @@ self.onmessage = async ({ data }) => {
     }
   } catch (err) {
     const cancelled = data.type === 'load' && loadController?.signal.aborted;
+    await trackedGpu?.flush();
+    trackedGpu?.restore();
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics });
     // A failed create/generate may retain native allocations. Use a fresh worker/page.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
