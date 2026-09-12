@@ -112,7 +112,15 @@ try {
     const page = await browser.newPage();
     const modelRequests = [];
     page.on('request', request => { if (/model\.onnx|\.wasm(?:\?|$)/.test(request.url())) modelRequests.push(request.url()); });
-    await page.goto(`${origin}/web/sllm/experiments/index.html`);
+    let releaseBootstrap;
+    const bootstrapGate = new Promise(resolve => { releaseBootstrap = resolve; });
+    await page.route(`${origin}/web/vendor/build.json`, async route => { await bootstrapGate; await route.continue(); });
+    await page.goto(`${origin}/web/sllm/experiments/index.html`, { waitUntil: 'commit' });
+    await page.locator('#kind').waitFor();
+    for (const id of ['kind', 'staging', 'repeats', 'start', 'export']) {
+      assert.equal(await page.locator(`#${id}`).isDisabled(), true, 'controls wait for release bootstrap');
+    }
+    releaseBootstrap();
     await page.locator('#kind').selectOption('tokenizer');
     assert.equal(await page.locator('#staging').isDisabled(), true);
     await page.locator('#start').click();
@@ -122,7 +130,7 @@ try {
     assert.equal(result.success, true);
     assert.equal(result.execution.completedScope, 'tokenizer-preparation');
     assert.equal(result.execution.loadOrder, 'tokenizer-only');
-    assert.equal(result.execution.tokenizerBuild.implementation, 'incremental-bpe-v1');
+    assert.equal(result.execution.tokenizerBuild.implementation, 'compact-bpe-v2');
     assert.equal(result.comparison.gpuWeightAllocated, null);
     const run = await page.evaluate(async runId => {
       const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
@@ -130,6 +138,7 @@ try {
     }, result.runId);
     assert.equal(run.summary.tokenizer.vocabSize, 262145, 'vocabulary includes the added token at ID 262144');
     assert.equal(run.summary.tokenizer.mergeCount, 514906);
+    assert.equal(run.summary.tokenizer.memoryLayout.sourceReleased, true);
     assert.ok(run.preparation['tokenizer.json']['tokenizer-parse-start']);
     assert.ok(run.milestones['tokenizer-ready']);
     assert.equal(run.milestones['session-create'], undefined);
@@ -239,30 +248,66 @@ try {
     assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
     assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
     assert.ok(result.timings.modelLoadCallMs >= 0);
-    // Reuse the real model's verified files, in the same origin/context. This
-    // comparison must perform no model download and must not need an ORT session.
-    const resident = await page.evaluate(async () => {
-      const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
-      const worker = new Worker(asset('web/sllm/experiments/device-probes.js'), { type: 'module' });
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { worker.terminate(); reject(new Error('Full OPFS residency timed out')); }, 600000);
-        worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
-        worker.onmessage = ({ data }) => {
-          if (data.type === 'result') { clearTimeout(timer); worker.terminate(); resolve(data.result); }
-        };
-        worker.postMessage({ kind: 'resident-opfs', stagingMiB: 2 });
+    // Exercise A/B/C through the actual UI, sharing only verified OPFS storage.
+    // Every case creates a fresh page/worker and uses the production JS imports.
+    await page.goto(`${origin}/web/sllm/experiments/index.html`);
+    const requests = [];
+    page.on('request', request => requests.push(request.url()));
+    for (const kind of ['resident-opfs', 'resident-opfs-tokenizer', 'session-only']) {
+      await page.locator('#kind').selectOption(kind);
+      await page.locator('#staging').selectOption('2');
+      await page.locator('#repeats').selectOption('1');
+      requests.length = 0;
+      const priorCount = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2') || '{}').results?.length || 0);
+      await page.locator('#start').click();
+      await page.waitForFunction(priorCount => {
+        const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+        return !state.active && state.results.length > priorCount;
+      }, priorCount, { timeout: 600000 });
+      const exported = await page.evaluate(async () => {
+        const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+        const result = state.results.at(-1);
+        const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
+        const { readRun } = await import(asset('web/sllm/diagnostics.js'));
+        return { result, run: await readRun(result.runId) };
       });
-    });
-    results.push({ id: 'full-opfs-resident', ...resident });
-    assert.equal(resident.success, true, resident.error);
-    assert.equal(resident.loadedInitializerCount, 251);
-    assert.equal(resident.storage.cacheHits, 9);
-    assert.equal(resident.storage.downloadedFiles, 0);
-    assert.equal(resident.storage.migratedFiles, 0);
-    assert.equal(resident.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
-    assert.equal(resident.storage.openHandles, 0);
-    assert.equal(resident.gpuLedger.tracking.status, 'complete');
-    console.log(JSON.stringify({ id: 'full-opfs-resident', success: resident.success, storage: resident.storage }));
+      const { result: comparison, run } = exported;
+      assert.equal(comparison.kind, kind, 'bootstrap must preserve the selected experiment');
+      assert.equal(comparison.stagingMiB, 2);
+      assert.equal(comparison.success, true, comparison.error);
+      assert.equal(run.status, 'complete');
+      assert.equal(run.summary.modelSessionCreated, kind === 'session-only');
+      assert.equal(run.summary.tokenizerPrepared, kind === 'resident-opfs-tokenizer');
+      assert.equal(run.milestones.ready, undefined, 'a comparison must never announce application readiness');
+      assert.equal(comparison.comparison.loadedInitializerCount, 251);
+      assert.equal(comparison.comparison.gpuQueueCompletedBytes, result.metrics.totalExternalTensorBytes);
+      assert.equal(comparison.comparison.storage.cacheHits, 9);
+      assert.equal(comparison.comparison.storage.downloadedFiles, 0);
+      assert.equal(comparison.execution.ortJavaScriptLoaded, true);
+      assert.equal(comparison.execution.ortWasmInstantiated, kind === 'session-only');
+      assert.equal(comparison.execution.completedScope, { 'resident-opfs': 'gpu-residency',
+        'resident-opfs-tokenizer': 'tokenizer-and-gpu-residency', 'session-only': 'model-session' }[kind]);
+      assert.equal(requests.some(url => url.endsWith('/tokenizer/tokenizer.json')), kind === 'resident-opfs-tokenizer');
+      assert.equal(requests.some(url => url.endsWith('.wasm')), kind === 'session-only');
+      if (kind !== 'session-only') assert.equal(requests.some(url => url.includes('huggingface.co')), false);
+      await page.evaluate(comparison => {
+        const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+        state.active = { kind: comparison.kind, runId: comparison.runId, runIds: [comparison.runId],
+          startedAt: comparison.startedAt, seriesId: comparison.seriesId, requestedRuns: 1, remaining: 1,
+          mode: comparison.mode, stagingMiB: comparison.stagingMiB };
+        sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+      }, comparison);
+      requests.length = 0;
+      await page.reload();
+      await page.locator('#status').getByText('이전 실험 완료 기록을 복구했습니다.').waitFor();
+      const recovered = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+      assert.equal(recovered.success, true);
+      assert.equal(recovered.execution.completedScope, comparison.execution.completedScope);
+      assert.equal(requests.some(url => /\.wasm$|\/tokenizer\/tokenizer.json$/.test(url)), false, 'recovery must not start a new worker');
+      results.push({ id: `comparison-${kind}`, ...exported, recoveryVerified: true });
+      console.log(JSON.stringify({ id: `comparison-${kind}`, success: true, execution: comparison.execution,
+        uploadedBytes: comparison.comparison.gpuQueueCompletedBytes, storage: comparison.comparison.storage }));
+    }
     await page.close();
   }
   if (process.env.TEST_FULL_MODEL === '1') {
@@ -367,7 +412,7 @@ try {
   results.push({ id: 'gpu-tracking-browser', success: true, lateBindingVerified: true, allocationErrorVerified: true });
   const corruptedResidency = await page.evaluate(async () => {
     const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
-    const { residentProbe } = await import(asset('web/sllm/experiments/device-probes.js'));
+    const { residentProbe } = await import(asset('web/sllm/experiments/probes.js'));
     const { FIXTURE } = await import(asset('web/sllm/experiments/fixture.js'));
     const original = GPUQueue.prototype.writeBuffer;
     let corrupted = false;
@@ -477,7 +522,7 @@ try {
   // Exercise the actual experiment controls, then stop during the intended idle period.
   await page.locator('#kind').selectOption('resident');
   assert.equal(await page.locator('#mode').isDisabled(), true);
-  assert.equal(await page.locator('#repeats').isDisabled(), true);
+  assert.equal(await page.locator('#repeats').isDisabled(), false);
   await page.locator('#kind').selectOption('runtime');
   assert.equal(await page.locator('#mode').isDisabled(), false);
   assert.equal(await page.locator('#repeats').isDisabled(), true);

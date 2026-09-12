@@ -1,6 +1,6 @@
 import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
-import { isResident, isSimpleProbe, executionSettings, executionEvidence, scopeLabel, seriesSummary } from './results.js';
+import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary } from './results.js';
 
 const $ = id => document.getElementById(id);
 const key = 'didimdol.device-experiments.v2';
@@ -15,10 +15,12 @@ $('inspector').value = state.inspector || 'unknown';
 $('repeats').value = String(state.repeats || 1);
 $('kind').value = state.kind || 'resident';
 function updateControls() {
+  $('start').disabled = !!state.active;
+  $('export').disabled = false;
   for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind']) $(id).disabled = !!state.active;
   if (!state.active) {
     $('mode').disabled = isResident($('kind').value);
-    $('repeats').disabled = $('kind').value !== 'load';
+    $('repeats').disabled = !canRepeat($('kind').value);
     $('staging').disabled = $('kind').value === 'tokenizer';
   }
 }
@@ -37,7 +39,7 @@ function render() {
     const idle = execution.idleRequestedSeconds === 0 ? '대기 없음'
       : `${execution.idleElapsedMs == null ? '미기록' : (execution.idleElapsedMs / 1000).toFixed(1)} / ${execution.idleRequestedSeconds ?? '?'}초`;
     const setting = result.kind === 'tokenizer' ? '모델 세션 없음' : `${result.stagingMiB ?? '?'} MiB`;
-    for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 사용 안 함' : execution.runtimeMode || '미기록'}`,
+    for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 세션 없음' : execution.runtimeMode || '미기록'}`,
       result.interrupted ? '중단 (원인 미확인)' : result.success ? scopeLabel(execution.completedScope) : result.cancelled ? '사용자 중단' : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
@@ -59,6 +61,9 @@ if (state.active) {
   const storage = diagnostic?.summary?.storage;
   const success = !diagnostic?.fault && ((kind === 'load' && diagnostic?.status === 'ready') ||
     (kind === 'tokenizer' && diagnostic?.status === 'complete' && diagnostic.summary?.tokenizerPrepared && diagnostic.summary?.modelSessionCreated === false) ||
+    (kind === 'session-only' && diagnostic?.status === 'complete' && diagnostic.summary?.modelSessionCreated && diagnostic.summary?.tokenizerPrepared === false) ||
+    (['resident-opfs', 'resident-opfs-tokenizer'].includes(kind) && diagnostic?.status === 'complete' &&
+      !!executionEvidence({ ...state.active, success: true }, diagnostic).completedScope) ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && storage?.totalFiles > 0 && storage.cacheHits === storage.totalFiles) ||
     ((isSimpleProbe(kind) || kind === 'probe') && diagnostic?.status === 'complete') ||
     (kind === 'evaluation' && state.active.evaluations?.length === 2 && state.active.evaluations.every(value => value.failed === 0)));
@@ -175,7 +180,7 @@ async function begin(config) {
   };
   worker.onmessage = async ({ data }) => {
     if (!state.active) return;
-    if (data.type === 'worker-ready') worker.postMessage({ type: config.kind === 'tokenizer' ? 'tokenizer' : 'load',
+    if (data.type === 'worker-ready') worker.postMessage({ type: applicationOperation(config.kind),
       device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
     if (data.type === 'preparation') $('last').textContent = JSON.stringify(data.record, null, 2);
     if (data.type === 'phase') $('status').textContent = data.text;
@@ -212,7 +217,7 @@ $('start').onclick = () => {
   state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   const kind = $('kind').value;
   state.kind = kind;
-  reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : kind === 'load' ? state.repeats : 1,
+  reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : canRepeat(kind) ? state.repeats : 1,
     mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, reportedDevice: state.device });
 };
 $('stop').onclick = async () => {

@@ -1,0 +1,268 @@
+{
+  "recordedAt": "2026-09-12T10:08:30.355920+00:00",
+  "releaseId": "b2808158d748a4fc5ac2155859ee857eacc237ce4eb8a594b72e64f41bde1adc",
+  "provenance": {
+    "appCommit": "53303eb20999b4ca93691946122ad14df24ce0c6",
+    "appDirty": true,
+    "nodeVersion": "v22.22.1"
+  },
+  "tokenizerBuild": {
+    "implementation": "compact-bpe-v2",
+    "version": "0.1.3",
+    "transformersVersion": "4.2.0",
+    "sourceSha256": "6d92e25f9576e67124b3a3f910f5cc1df95a42bde4df4f5387f62dee4554f301",
+    "autoTokenizerSourceSha256": "d1ef852e81052053c459b3c0ad424cea54cde9e078615d613cce012e43b0962a",
+    "retentionSourceSha256": "b119e0be7088a6ef6fd56e0821c510559f5f6c6c1275a0805ec77a3dc4a5f68e",
+    "patchSha256": "7a836c21d9b037ffdcbfddb9ab8e1555426573c25f010efd530f01793fcf8ca6"
+  },
+  "environment": {
+    "node": "v22.22.1",
+    "browserUserAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+    "gpu": "SwiftShader software WebGPU",
+    "fullAppMode": "asyncify",
+    "fullAppStagingMiB": 2,
+    "fullAppStorageQuotaOverrideBytes": 8589934592
+  },
+  "unitTests": {
+    "command": "npm test",
+    "passed": 43,
+    "failed": 0,
+    "coverage": "All 514906 merge ranks, all evaluation messages, Unicode/special tokens, chat templates and ROUGE equivalence; duplicate/absent merge pairs and added-token ID guards; comparison scopes and legacy exports."
+  },
+  "build": {
+    "command": "npm run build",
+    "passed": true,
+    "releaseVerification": {
+      "command": "npm run verify:release",
+      "passed": true,
+      "verifiedAssets": 66
+    }
+  },
+  "browser": {
+    "command": "TEST_APP_LOAD=1 npm run test:browser",
+    "passed": true,
+    "checks": [
+      "smoke-asyncify",
+      "resident-asyncify",
+      "runtime-asyncify",
+      "resident-opfs-asyncify",
+      "smoke-jspi",
+      "runtime-jspi",
+      "smoke-stock",
+      "tokenizer-ui",
+      "tokenizer-recovery-ui",
+      "app-from-pretrained",
+      "comparison-resident-opfs",
+      "comparison-resident-opfs-tokenizer",
+      "comparison-session-only",
+      "gpu-tracking-browser",
+      "resident-corruption",
+      "diagnostic-ui"
+    ],
+    "bootstrap": {
+      "delayedManifestControlsDisabled": true,
+      "selectedCaseAndStagingPreserved": true
+    },
+    "fullApp": {
+      "status": "ready",
+      "loadedInitializers": 251,
+      "uploadedBytes": 1072392704,
+      "timingsMs": {
+        "tokenizerPreparationMs": 660.5,
+        "evaluationInputPreparationMs": 25.5,
+        "graphPreparationMs": 27,
+        "weightPreparationMs": 18281.20000001788,
+        "modelLoadCallMs": 10187,
+        "totalLoadMs": 29196.600000023842
+      },
+      "tokenizerMemoryLayout": {
+        "sourceReleased": true,
+        "rankKeyFormat": "token-id-pair-v2",
+        "mergeCount": 514906,
+        "numericRankCount": 514906,
+        "rankTableBytes": 12582912,
+        "fallbackRankCount": 0
+      },
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 14138.800000011921,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 31885,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "cleanupVerified": true
+    },
+    "comparisons": [
+      {
+        "kind": "resident-opfs",
+        "success": true,
+        "stagingMiB": 2,
+        "status": "complete",
+        "completedScope": "gpu-residency",
+        "tokenizerPrepared": false,
+        "modelSessionCreated": false,
+        "ortJavaScriptMode": "asyncify",
+        "ortWasmInstantiated": false,
+        "applicationReadyEmitted": false,
+        "loadedInitializers": 251,
+        "uploadedBytes": 1072392704,
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 9,
+          "migratedFiles": 0,
+          "downloadedFiles": 0,
+          "verifiedBytes": 0,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 699,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 2203.399999588728,
+          "rangeReadPeakMs": 14.699999988079071,
+          "activeLocation": null
+        },
+        "durationMs": 6794,
+        "recoveryVerified": true
+      },
+      {
+        "kind": "resident-opfs-tokenizer",
+        "success": true,
+        "stagingMiB": 2,
+        "status": "complete",
+        "completedScope": "tokenizer-and-gpu-residency",
+        "tokenizerPrepared": true,
+        "modelSessionCreated": false,
+        "ortJavaScriptMode": "asyncify",
+        "ortWasmInstantiated": false,
+        "applicationReadyEmitted": false,
+        "loadedInitializers": 251,
+        "uploadedBytes": 1072392704,
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 9,
+          "migratedFiles": 0,
+          "downloadedFiles": 0,
+          "verifiedBytes": 0,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 699,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 1828.0000001490116,
+          "rangeReadPeakMs": 14.900000005960464,
+          "activeLocation": null
+        },
+        "durationMs": 10430,
+        "recoveryVerified": true
+      },
+      {
+        "kind": "session-only",
+        "success": true,
+        "stagingMiB": 2,
+        "status": "complete",
+        "completedScope": "model-session",
+        "tokenizerPrepared": false,
+        "modelSessionCreated": true,
+        "ortJavaScriptMode": "asyncify",
+        "ortWasmInstantiated": true,
+        "applicationReadyEmitted": false,
+        "loadedInitializers": 251,
+        "uploadedBytes": 1072392704,
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 9,
+          "migratedFiles": 0,
+          "downloadedFiles": 0,
+          "verifiedBytes": 0,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 699,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 2146.4000005126,
+          "rangeReadPeakMs": 14.099999994039536,
+          "activeLocation": null
+        },
+        "durationMs": 11632,
+        "recoveryVerified": true
+      }
+    ]
+  },
+  "nodeMemoryComparison": {
+    "command": "node tools/measure-tokenizer.mjs",
+    "method": "Three fresh Node processes per variant; retained heap and array buffers sampled after GC. No forced GC in the browser. Not iPhone RSS.",
+    "variants": {
+      "baseline": "Upstream with the same preparation loader",
+      "incremental": "Previous incremental-bpe-v1",
+      "patched": "Current compact-bpe-v2"
+    },
+    "measurements": {
+      "baseline": {
+        "maxRSSMiB": [
+          404.49,
+          402.84,
+          402.93
+        ],
+        "medianMaxRSSMiB": 402.93,
+        "medianRetainedHeapMiB": 142.2,
+        "medianRetainedArrayBuffersMiB": 0.06,
+        "medianRetainedHeapAndArrayBuffersMiB": 142.26,
+        "preparationMs": [
+          1204.3,
+          775.6,
+          848.9
+        ]
+      },
+      "incremental": {
+        "maxRSSMiB": [
+          329.01,
+          353.21,
+          331.35
+        ],
+        "medianMaxRSSMiB": 331.35,
+        "medianRetainedHeapMiB": 142.42,
+        "medianRetainedArrayBuffersMiB": 0.06,
+        "medianRetainedHeapAndArrayBuffersMiB": 142.49,
+        "preparationMs": [
+          767.5,
+          699.6,
+          800.3
+        ]
+      },
+      "patched": {
+        "maxRSSMiB": [
+          298.5,
+          298.25,
+          303.0
+        ],
+        "medianMaxRSSMiB": 298.5,
+        "medianRetainedHeapMiB": 35.94,
+        "medianRetainedArrayBuffersMiB": 12.06,
+        "medianRetainedHeapAndArrayBuffersMiB": 48.0,
+        "preparationMs": [
+          884.7,
+          722.7,
+          909.4
+        ]
+      }
+    },
+    "retainedHeapAndArrayBuffersReductionVsPreviousPercent": 66.31
+  },
+  "limitations": [
+    "No physical iPhone validation or same-time OS termination report was available for this revision.",
+    "Node heap plus array buffers is not process RSS; typed-array storage is included rather than counted as eliminated memory.",
+    "Desktop comparisons exercise each case once. Three phone loads, five cached loads, short/long inference and two 100-row evaluations remain device acceptance checks.",
+    "Desktop full-app inference checks use two generated tokens on each real short/long prompt; they do not measure full 100-row evaluation performance.",
+    "New pages/workers do not guarantee independent OS processes. Further native ORT/driver investigation depends on session-only phone results."
+  ]
+}

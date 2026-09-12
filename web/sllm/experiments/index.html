@@ -4,25 +4,28 @@
 <style>body{font:16px system-ui;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.6}input,select,button{font:inherit;padding:8px;margin:6px 0;max-width:100%;box-sizing:border-box}input{width:100%}button{margin-right:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #ddd}table{width:100%}</style>
 <h1>iPhone FP32 실행 진단</h1>
 <p>실험마다 새 페이지에서 시작합니다. 페이지가 예기치 않게 다시 열리면 중단된 기록을 표시하며 자동 재시도하지 않습니다. 모델 정밀도는 FP32입니다.</p>
-<label>기기·OS·브라우저 버전 <input id="device" placeholder="예: iPhone 14 Pro Max / iOS 26.4.2 / Chrome 버전"></label>
-<label>실험 <select id="kind">
+<label>기기·OS·브라우저 버전 <input id="device" disabled placeholder="예: iPhone 14 Pro Max / iOS 26.4.2 / Chrome 버전"></label>
+<label>실험 <select id="kind" disabled>
 <option value="resident">1. GPU 가중치 상주만 확인 (약 1.07 GB)</option>
 <option value="resident-opfs">1b. 저장된 가중치 GPU 상주 확인</option>
+<option value="resident-opfs-tokenizer">1c. 토크나이저 + 저장된 가중치 GPU 상주</option>
 <option value="runtime">2. 작은 모델 실행 + 2분 대기</option>
 <option value="tokenizer">2b. 토크나이저 준비만 확인</option>
+<option value="session-only">2c. 전체 모델 세션만 생성 (토크나이저 없음)</option>
 <option value="load">3. 전체 모델 로드</option>
 <option value="warm-load">4. 저장된 모델 로드 5회</option>
 <option value="probe">5. 전체 모델 + 짧은·긴 입력 추론</option>
 <option value="evaluation">6. 같은 세션에서 100건 평가 2회</option>
 </select></label>
-<label>런타임 <select id="mode"><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
-<label>전송 크기 <select id="staging"><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
-<label>전체 모델 로드 반복 <select id="repeats"><option value="1">1회</option><option value="3">3회</option></select></label>
-<label>검사기 연결 <select id="inspector"><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
+<label>런타임 <select id="mode" disabled><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
+<label>전송 크기 <select id="staging" disabled><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
+<label>상주·세션·전체 로드 반복 <select id="repeats" disabled><option value="1">1회</option><option value="3">3회</option></select></label>
+<label>검사기 연결 <select id="inspector" disabled><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
 <p>전송 크기는 임시 버퍼 크기를 바꿉니다. 전체 가중치의 GPU 상주량 약 1,023 MiB는 동일합니다. 작은 모델 실험은 실행 후 120초 동안 관찰합니다.</p>
-<p>상주 실험은 ORT를 사용하지 않으며 1회 실행합니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
+<p>상주 실험은 ORT 세션을 생성하지 않습니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
 <p>토크나이저 실험은 전체 로드와 같은 토크나이저를 준비하며 모델 가중치는 적재하지 않습니다. 전체 로드는 토크나이저 준비 후 가중치를 적재합니다.</p>
-<p><button id="start">실험 시작</button><button id="stop" disabled>중단</button><button id="export">진단 JSON 저장</button></p>
+<p>메모리 비교는 같은 전송 크기에서 1b·1c와 2c·3을 각각 비교하세요. 1c는 토크나이저를 유지한 채 전체 가중치를 검증합니다. 2c는 전체 모델 세션만 준비하며 추론 준비 완료를 뜻하지 않습니다. 각 항목은 3회 반복할 수 있고, 중단 뒤에는 자동 재시도하지 않습니다.</p>
+<p><button id="start" disabled>실험 시작</button><button id="stop" disabled>중단</button><button id="export" disabled>진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>
 <p>같은 기기·릴리스·런타임에서 전송 크기와 캐시 조건을 비교해 주세요. GPU 계측이 부분 관측이면 전체 할당 이력을 확인할 수 없습니다.</p>
 <div style="overflow-x:auto"><table style="min-width:1400px"><thead><tr><th>실험·설정</th><th>검증 결과</th><th>실행 횟수</th><th>관찰 / 요청 시간</th><th>기기·검사기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table></div>

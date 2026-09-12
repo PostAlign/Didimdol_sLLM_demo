@@ -4,7 +4,76 @@ Target: iPhone 14 Pro Max, iOS 26, Chrome for iOS. FP32 weights, model revision,
 100 evaluation rows, prompt template, sampling settings and the 512-token limit remain the same.
 This change has local browser tests; iPhone success must be established on the actual device.
 
-## Tokenizer preparation and September 12 restart investigation
+## Compact BPE and full-session comparisons
+
+The September 12 phone exports from release `c418434115fb` (commit `53303eb`)
+completed tokenizer preparation but interrupted during full-model uploads:
+180/251 initializers with 8 MiB staging on the evaluation page and 241/251 with
+2 MiB on the diagnostic page. Both had nine OPFS cache hits, a 23.125 MiB WASM
+heap and no recorded fault/device loss. These are interruption observations,
+not proof of jetsam or a controlled staging-size comparison.
+
+The new `compact-bpe-v2` bundle stores numeric token-ID pair keys and merge ranks
+in a fixed open-addressed table (12 MiB for this tokenizer). It preserves the last
+rank for duplicate rules, exact integer keys and a fallback for rules whose pieces
+are absent from the base vocabulary. The source is pinned by version and SHA-256;
+the transformers source retaining tokenizer JSON is also checked before building.
+Added tokens that change a base vocabulary ID are rejected during preparation.
+
+After construction, `releaseBpeSource` replaces the three private source-JSON
+references with lightweight configuration and drops the source merge array.
+The caller's JSON is not mutated. Runtime vocabulary, normalizer, pre/post
+processors, decoder, added tokens and all generation/evaluation settings remain
+available. This application bundle intentionally does not retain a serializable
+original model under private `_tokenizerJSON`, `tokenizer.model` or `model.config`.
+Use the immutable tokenizer assets to reconstruct another tokenizer. Releasing
+references makes temporary objects collectible; it does not force browser GC.
+
+`tokenizer.memoryLayout` records source release, merge/rank counts and table bytes.
+The Node memory comparison includes upstream, previous `incremental-bpe-v1`, and
+current implementations in fresh processes. Compare **heapUsed + arrayBuffers**
+as well as maximum RSS; typed-array storage must not disappear from the reported
+memory budget. These are Node measurements, not iPhone process memory.
+In the local three-run comparison, median retained heap plus array buffers fell
+from 142.49 MiB (v1) to 48.00 MiB (v2), including the 12 MiB rank table. Median
+maximum RSS fell from 331.35 to 298.50 MiB. Exact release identity, measurements
+and browser results are in [compact-tokenizer-validation.json](compact-tokenizer-validation.json).
+
+| Comparison | UI experiment | Tokenizer retained | Full ORT session | Upload order |
+|---|---|---|---|---|
+| A | 1b: stored-weight residency | no | no | manifest |
+| B | 1c: tokenizer + stored-weight residency | yes | no | manifest |
+| C | 2c: session only | no | yes | ORT |
+| D | 3: full model load | yes | yes | ORT |
+
+A/B now use the same application worker and import the same ORT/transformers
+JavaScript. Neither instantiates ORT WASM. Their runtime mode is null, with the
+JavaScript mode and imports recorded separately. C/D call the same
+`loadModelSession` function, including graph verification, OPFS preparation,
+session options and range loader. Both prepare the template/evaluation data;
+only D prepares the tokenizer and ROUGE closure. C completes with the distinct
+`model-session` scope and never emits application `ready` or accepts inference.
+B keeps its tokenizer reachable until every weight has been verified.
+Experiment controls stay disabled until release/bootstrap initialization finishes,
+so a slow startup cannot overwrite the user's selection with the default case.
+
+Compare A/B and C/D at 2 MiB first, using the same release, device, inspector
+setting and verified OPFS cache. Each can request three runs. Every run creates
+a new page/worker; an interruption stops automatic continuation. A new page
+does not guarantee a new OS process. Initializer order, cache use, component
+completion and recovery evidence are retained in exports. The existing synthetic
+residency probe and the legacy direct probe worker remain available separately.
+
+Local checks: `npm test`, `npm run build`, `npm run verify:release`,
+`node tools/measure-tokenizer.mjs`, and `TEST_APP_LOAD=1 npm run test:browser`.
+Browser checks cover full-model load/short-long prompt decoding, A/B/C through
+the UI, missing-cache rejection, completion recovery and cleanup. Phone
+acceptance remains three full loads, five cached loads, short/long inference,
+then two 100-row evaluations. Compare any new interruption with the same-time
+device termination report before assigning an OS/GPU cause. Session-only failure
+on the phone is the trigger for further native ORT/driver-memory investigation.
+
+## Previous tokenizer preparation change (incremental-bpe-v1)
 
 The two iPhone full-load records reached `session-create-complete`, with all 251
 external initializers uploaded and validated, then stopped at `tokenizer-load`.
@@ -24,11 +93,11 @@ asset SHA-256 is release metadata, not a claimed runtime rehash; loaded byte siz
 are checked. `jsMemory` is `null` where `performance.memory` is unavailable, and
 even supported JS-heap samples are not total browser/process RSS.
 
-`tools/tokenizer-patch.mjs` checks the exact tokenizers 0.1.3 and transformers 4.2.0
-source hashes and patches the browser bundle in memory. BPE/vocabulary Maps are
+The previous patch checked the exact tokenizers 0.1.3 and transformers 4.2.0
+source hashes and patched the browser bundle in memory. BPE/vocabulary Maps were
 filled incrementally without creating complete arrays of key/value pairs. Merge
 keys, insertion order, tokenizer class selection and retained source configuration
-are preserved. The patch also exposes upstream class selection as `from_json` so
+were preserved. The patch also exposes upstream class selection as `from_json` so
 the application can instrument file parsing separately. The patch identity is
 included in release hashes and diagnostics. `node_modules` is not modified.
 
@@ -230,9 +299,11 @@ Open `web/sllm/experiments/` on the actual phone, enter the complete OS/browser 
 | Experiment | Purpose |
 | --- | --- |
 | GPU residency | No ORT import. Fill buffers matching all external weights and checksum every word, keeping every buffer alive until completion. |
-| Stored-weight GPU residency | No ORT import. Read the verified OPFS model files and retain all weight buffers. Requires files already prepared by a full-load attempt. |
+| Stored-weight GPU residency | Application worker/JS imports, no ORT WASM or session. Read verified OPFS files and retain all weight buffers. Requires files already prepared by a full-load attempt. |
+| Tokenizer + stored-weight residency | Same path as stored-weight residency, retaining the application's prepared tokenizer throughout verification. |
 | Small runtime | Execute the 10 MiB FP32 model twice, then wait 120 seconds to expose delayed compilation/resource growth. |
 | Tokenizer preparation | Same application worker and tokenizer loader, without a model session or weight requests. Imports application/ORT JavaScript; does not instantiate the ORT WASM runtime. |
+| Full session only | Same session-creation path as full load, with tokenizer preparation omitted. Reports session completion separately from application readiness. |
 | Full load | Actual app/from_pretrained path with verified OPFS weights. |
 | Five cached loads | Five fresh pages/workers reusing completed files. Run after the first full load. |
 | Short inference | Actual shortest (35 tokens) and longest (266 tokens) evaluation inputs, up to 32 greedy tokens each. |
@@ -343,12 +414,13 @@ an explicit error. This path uses the production store and the same origin lock,
 keeps one read handle open, and closes it on completion or failure. Fixture data
 creation is available only via the existing test worker's explicit `fixture` flag.
 
-Both resident modes now use `verification: u32-fnv1a-64-lanes-v1`: CPU and GPU
+All resident modes use `verification: u32-fnv1a-64-lanes-v1`: CPU and GPU
 compute matching integer checksums over every 32-bit word of the FP32 data. The
 GPU returns 256 bytes per initializer. This is a checksum comparison, not a
-cryptographic proof or a full-byte readback. Both modes retain all weight buffers,
-use the same scratch size, shader and manifest allocation order, and import no
-ORT runtime. CPU checksum work is present in both; it is additional work relative
+cryptographic proof or a full-byte readback. All modes retain all weight buffers,
+use the same scratch size, shader and manifest allocation order, and create no
+ORT session. The application-worker OPFS pair imports ORT JavaScript without
+instantiating WASM. CPU checksum work is additional work relative
 to production loading. The old resident probe used floating-point sums of ones,
 so its durations should not be compared directly with the new verification method.
 The manifest order also differs from ORT's observed allocation order. Neither a

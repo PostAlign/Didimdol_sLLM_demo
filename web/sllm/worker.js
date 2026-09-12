@@ -9,6 +9,7 @@ import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext } from './
 import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
+import { opfsResidentProbe } from './experiments/probes.js';
 
 import { makeRouge1 } from './rouge.js';
 
@@ -58,7 +59,7 @@ env.fetch = (input, init) => {
 
 // Files are verified on disk before ORT receives small range-source descriptors.
 let weightStore, journal, loadController, trackedGpu, sessionMetrics;
-let operation = null, queuedRun = null;
+let operation = null, queuedRun = null, preparationAttempted = false;
 const trace = new URL(self.location.href).searchParams.get('trace') === '1';
 async function mountWeights(manifest) {
   weightStore = await OpfsWeightStore.open(manifest);
@@ -127,7 +128,7 @@ async function pruneStaleCache() {
 // A failed WebGPU session is not retried in a heap that may retain allocations.
 
 async function loadTokenizer(loadOrder = LOAD_ORDER) {
-  if (typeof AutoTokenizer.from_json !== 'function' || runtimeBuild.tokenizer?.implementation !== 'incremental-bpe-v1') {
+  if (typeof AutoTokenizer.from_json !== 'function' || runtimeBuild.tokenizer?.implementation !== 'compact-bpe-v2') {
     throw new Error('토크나이저 런타임을 새로 빌드해야 합니다. npm run build를 실행해 주세요.');
   }
   const result = await prepareTokenizer({
@@ -163,22 +164,42 @@ async function loadEvaluationInputs() {
     throw error;
   }
   await journal.checkpoint({ stage: 'evaluation-data-ready', rows: rows.length });
-  rouge1 = makeRouge1(tokenizer);
+  if (tokenizer) rouge1 = makeRouge1(tokenizer);
 }
 
-async function load({ device: preferred, stagingMiB = 8 }) {
+async function load({ device: preferred, stagingMiB = 8 }, sessionOnly = false) {
   const loadStarted = performance.now(), timings = {};
   if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
   env.useBrowserCache = true;   // 작은 모델 설정만 라이브러리 캐시 사용. 토크나이저는 릴리스 URL, 가중치는 OPFS.
   await pruneStaleCache();
 
   // Construct the large JS vocabulary before any full-model GPU buffers exist.
-  await loadTokenizer();
-  timings.tokenizerPreparationMs = tokenizerResult.durationMs;
+  if (!sessionOnly) await loadTokenizer();
+  timings.tokenizerPreparationMs = tokenizerResult?.durationMs ?? 0;
   const inputsStarted = performance.now();
   await loadEvaluationInputs();
   timings.evaluationInputPreparationMs = performance.now() - inputsStarted;
 
+  await loadModelSession(stagingMiB, timings, sessionOnly ? 'session-only' : LOAD_ORDER);
+  timings.totalLoadMs = performance.now() - loadStarted;
+  sessionMetrics.timings = { ...timings };
+  loadController.signal.throwIfAborted();
+  await trackedGpu.flush();
+  if (trackedGpu.ledger.lastError) throw new Error(`WebGPU: ${trackedGpu.ledger.lastError}`);
+  if (sessionOnly) {
+    const result = { ...sessionMetrics, success: true, modelSessionCreated: true, tokenizerPrepared: false };
+    await journal.finish('complete', result);
+    post({ type: 'result', result });
+    return;
+  }
+  if (!model || !tokenizer || !rouge1) throw new Error('Model and tokenizer must both be prepared');
+  device = 'webgpu';
+  await journal.finish('ready', { ...sessionMetrics, modelSessionCreated: true, tokenizerPrepared: true });
+  post({ type: 'ready', device, dtype: 'fp32', rows: rows.length });
+}
+
+// Both the production load and the session-only diagnostic use this exact path.
+async function loadModelSession(stagingMiB, timings, loadOrder) {
   // 모바일 빌드 자체가 단일 스레드이며 런타임 설정도 일치시킨다.
   try {
     env.backends.onnx.wasm.numThreads = 1;
@@ -242,7 +263,8 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     },
   });
   globalThis.__ortExternalTensorLoader = loader;
-  await journal.checkpoint({ stage: 'session-create', runtimeMode, stagingMiB, timings: { ...timings }, storage: { ...weightStore.metrics } });
+  await journal.checkpoint({ stage: 'session-create', runtimeMode, stagingMiB, loadOrder,
+    tokenizerPrepared: !!tokenizer, allocationOrder: 'ort', timings: { ...timings }, storage: { ...weightStore.metrics } });
   let success = false;
   const modelCallStarted = performance.now();
   try {
@@ -267,7 +289,8 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     const metrics = loader.close(success);
     weightStore.close();
     const result = { stage: success ? 'session-create-complete' : 'session-create-failed',
-      loadOrder: LOAD_ORDER, tokenizer: tokenizerResult,
+      loadOrder, tokenizer: tokenizerResult, tokenizerPrepared: !!tokenizer,
+      modelSessionCreated: success, allocationOrder: 'ort',
       runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics,
       gpuLedger: { ...tracked.ledger }, storage: { ...weightStore.metrics }, lastInitializer: loader.last };
     result.timings = { ...timings };
@@ -279,15 +302,26 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     verifiedGraph = null;
   }
   env.useBrowserCache = true;
-  timings.totalLoadMs = performance.now() - loadStarted;
-  sessionMetrics.timings = { ...timings };
+}
 
-  loadController.signal.throwIfAborted();
-  await tracked.flush();
-  if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
-  device = 'webgpu';
-  await journal.finish('ready', sessionMetrics);
-  post({ type: 'ready', device, dtype: 'fp32', rows: rows.length });
+async function loadResidentComparison(data) {
+  const withTokenizer = data.type === 'resident-opfs-tokenizer';
+  if (withTokenizer) await loadTokenizer('tokenizer-before-residency');
+  const response = await fetch(new URL('../../model/initializers.json', import.meta.url));
+  if (!response.ok) throw new Error(`Initializer manifest HTTP ${response.status}`);
+  const manifest = await response.json();
+  if (manifest.revision !== REVISION) throw new Error('Manifest/model revision mismatch');
+  const result = await opfsResidentProbe(manifest, async record => {
+    loadController.signal.throwIfAborted();
+    await journal.checkpoint(record);
+    if (['resident-allocate', 'resident-complete', 'device-lost'].includes(record.stage)) post({ type: 'diagnostic', record });
+  }, data.stagingMiB ?? 8, false);
+  // Keep the tokenizer strongly reachable until every buffer has been verified.
+  if (withTokenizer && !tokenizer) throw new Error('Tokenizer was released during residency comparison');
+  const summary = { ...result, success: !journal.state.fault, tokenizer: tokenizerResult,
+    tokenizerPrepared: !!tokenizer, modelSessionCreated: false, ortWasmInstantiated: false };
+  await journal.finish('complete', summary);
+  post({ type: 'result', result: summary });
 }
 
 // ── 한 행 실행 ──────────────────────────────────────────────────────────────
@@ -441,6 +475,7 @@ async function runProbe(maxNewTokens = 32) {
   post({ type: 'probe-result', result });
 }
 
+const preparationOperations = new Set(['load', 'tokenizer', 'session-only', 'resident-opfs', 'resident-opfs-tokenizer']);
 self.onmessage = async ({ data }) => {
   if (data.type === 'stop') { aborted = true; loadController?.abort(); stopper.interrupt(); return; }
   if (data.type === 'dispose') {
@@ -458,41 +493,49 @@ self.onmessage = async ({ data }) => {
     finally { trackedGpu?.restore(); operation = null; }
     return;
   }
-  if (!['load', 'tokenizer', 'run', 'probe'].includes(data.type)) return;
-  if (operation) { if (!['load', 'tokenizer'].includes(data.type)) queuedRun = data; return; }
+  if (!preparationOperations.has(data.type) && !['run', 'probe'].includes(data.type)) return;
+  if (operation) { if (!preparationOperations.has(data.type)) queuedRun = data; return; }
   operation = data.type;
   aborted = false;
-  if (operation === 'load' || operation === 'tokenizer') loadController = new AbortController();
-  journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent, runtimeMode,
-    loadOrder: operation === 'tokenizer' ? 'tokenizer-only' : LOAD_ORDER,
-    stagingMiB: operation === 'tokenizer' ? null : operation === 'load' ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+  if (preparationOperations.has(operation)) loadController = new AbortController();
+  const resident = ['resident-opfs', 'resident-opfs-tokenizer'].includes(operation);
+  const loadOrder = { tokenizer: 'tokenizer-only', 'session-only': 'session-only',
+    'resident-opfs': 'residency-only', 'resident-opfs-tokenizer': 'tokenizer-before-residency' }[operation] || LOAD_ORDER;
+  journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
+    runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder,
+    stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
     workerURL: self.location.href });
   try {
     journal.state.environment.build = buildIdentity(runtimeBuild);
     await journal.checkpoint({ stage: `${operation}-start` });
+    if (preparationOperations.has(data.type)) {
+      if (preparationAttempted) throw new Error('Use a fresh worker for each preparation attempt');
+      preparationAttempted = true;
+    }
     if (data.type === 'tokenizer') {
       if (model || tokenizer) throw new Error('Use a fresh worker for the tokenizer diagnostic');
       await loadTokenizer('tokenizer-only');
       const result = { success: true, tokenizer: tokenizerResult, tokenizerPrepared: true, modelSessionCreated: false };
       await journal.finish('complete', result);
       post({ type: 'result', result });
-    } else if (data.type === 'load') {
-      if (model) throw new Error('A model is already loaded in this worker');
-      if (runtimeMode === 'stock') throw new Error('Production loading requires the OPFS range runtime. Use experiments for stock comparisons.');
-      if (runtimeBuild.rangeLoaderVersion !== 2) throw new Error('런타임을 새로 빌드해야 합니다: range-loader ABI 2 필요');
+    } else if (preparationOperations.has(data.type)) {
+      if (model || tokenizer) throw new Error('Use a fresh worker for model preparation');
+      if (!resident && runtimeMode === 'stock') throw new Error('Production loading requires the OPFS range runtime. Use experiments for stock comparisons.');
+      if (!resident && runtimeBuild.rangeLoaderVersion !== 2) throw new Error('런타임을 새로 빌드해야 합니다: range-loader ABI 2 필요');
       const execute = async lock => {
         if (!lock) throw new Error('다른 탭에서 모델을 준비 중입니다. 해당 작업이 끝난 후 다시 시도해 주세요.');
-        await load(data);
+        if (resident) await loadResidentComparison(data);
+        else await load(data, data.type === 'session-only');
       };
       if (navigator.locks) await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute);
       else await execute(true);
     } else {
-      if (!model) throw new Error('Model is not loaded');
+      if (!model || !tokenizer || !rouge1) throw new Error('Model and tokenizer must both be prepared');
       if (data.type === 'probe') await runProbe(data.maxNewTokens);
       else await runAll();
     }
   } catch (err) {
-    const cancelled = ['load', 'tokenizer'].includes(data.type) && loadController?.signal.aborted;
+    const cancelled = preparationOperations.has(data.type) && loadController?.signal.aborted;
     await trackedGpu?.flush();
     trackedGpu?.restore();
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,

@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executionSettings, executionEvidence, seriesSummary } from '../web/sllm/experiments/results.js';
+import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat } from '../web/sllm/experiments/results.js';
+
+test('comparison scopes require both components and cannot claim application readiness', () => {
+  const resident = { kind: 'resident-opfs-tokenizer', success: true };
+  assert.equal(executionEvidence(resident).completedScope, null);
+  assert.equal(executionEvidence({ ...resident, allBytesUsed: true }).completedScope, null);
+  const summary = { allBytesUsed: true, tokenizerPrepared: true, modelSessionCreated: false, ortWasmInstantiated: false };
+  const evidence = executionEvidence(resident, { summary, environment: { ortJavaScriptLoaded: true, ortJavaScriptMode: 'asyncify' } });
+  assert.equal(evidence.completedScope, 'tokenizer-and-gpu-residency');
+  assert.equal(evidence.runtimeMode, null);
+  assert.equal(evidence.ortWasmInstantiated, false);
+  assert.equal(evidence.ortJavaScriptLoaded, true);
+  const session = { kind: 'session-only', success: true, modelSessionCreated: true, tokenizerPrepared: false };
+  assert.equal(executionEvidence(session).completedScope, 'model-session');
+  assert.equal(executionEvidence({ ...session, modelSessionCreated: false }).completedScope, null);
+  for (const kind of ['resident-opfs', 'resident-opfs-tokenizer', 'session-only']) {
+    assert.equal(isSimpleProbe(kind), false, 'comparison uses the application worker');
+    assert.equal(applicationOperation(kind), kind);
+    assert.equal(canRepeat(kind), true);
+  }
+});
 
 test('tokenizer completion requires preparation evidence and cannot claim model loading or inference', () => {
   const result = { kind: 'tokenizer', success: true, mode: 'asyncify' };

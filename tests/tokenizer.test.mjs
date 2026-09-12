@@ -8,6 +8,8 @@ import { GemmaTokenizer } from '@huggingface/transformers';
 import { tokenizerPatch, patchTokenizerSource } from '../tools/tokenizer-patch.mjs';
 import { prepareTokenizer, readPreparationFile, jsMemory } from '../web/sllm/tokenizer-loader.js';
 import { RunDiagnostics, diagnosticSummary, recoveryEvidence } from '../web/sllm/diagnostics.js';
+import { releaseBpeSource } from '../web/sllm/tokenizer-memory.js';
+import { makeRouge1 } from '../web/sllm/rouge.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 
@@ -25,6 +27,20 @@ test('patched class selection, tokens, decoding and chat templates match upstrea
   const config = JSON.parse(await readFile(path.join(root, 'tokenizer/tokenizer_config.json'), 'utf8'));
   const baseline = new GemmaTokenizer(data, config);
   const patched = AutoTokenizer.from_json(data, config);
+  const layout = releaseBpeSource(patched);
+  assert.equal(layout.sourceReleased, true);
+  assert.equal(layout.mergeCount, 514906);
+  assert.equal(layout.fallbackRankCount, 0);
+  assert.equal(layout.rankTableBytes, 12 * 2**20);
+  assert.equal(patched._tokenizer.model.merges, null);
+  assert.equal(patched._tokenizer.model.config.vocab, undefined);
+  assert.equal(patched._tokenizerJSON.model.merges, undefined);
+  assert.equal(baseline._tokenizerJSON, data, 'compaction must not mutate a shared input object');
+  assert.equal(data.model.merges.length, 514906);
+  for (const [left, right] of data.model.merges) {
+    assert.equal(patched._tokenizer.model.rank_for_pair(left, right),
+      baseline._tokenizer.model.bpe_ranks.get(JSON.stringify([left, right])), 'all merge ranks, including hash collisions');
+  }
   assert.equal(patched.constructor.name, 'GemmaTokenizer');
   assert.equal(AutoTokenizer.from_json(data, { ...config, tokenizer_class: 'GemmaTokenizerFast' }).constructor.name, 'GemmaTokenizer');
   assert.deepEqual(patched.all_special_ids, baseline.all_special_ids);
@@ -38,8 +54,12 @@ test('patched class selection, tokens, decoding and chat templates match upstrea
     assert.deepEqual(actual, expected, text.slice(0, 60));
     assert.equal(patched.decode(actual), baseline.decode(expected));
     assert.equal(patched.decode(actual, { skip_special_tokens: true }), baseline.decode(expected, { skip_special_tokens: true }));
+    assert.deepEqual(patched.tokenize(text, { add_special_tokens: false }), baseline.tokenize(text, { add_special_tokens: false }));
   }
+  const expectedRouge = makeRouge1(baseline), actualRouge = makeRouge1(patched);
   for (const row of rows) {
+    const reference = row.messages.at(-1).content;
+    assert.deepEqual(actualRouge('견인 치료 123 😀', reference), expectedRouge('견인 치료 123 😀', reference));
     const messages = row.messages.slice(0, -1);
     const options = { chat_template, add_generation_prompt: true, return_dict: true };
     const expected = baseline.apply_chat_template(messages, options);
@@ -50,6 +70,34 @@ test('patched class selection, tokens, decoding and chat templates match upstrea
       actual[key].dispose(); expected[key].dispose();
     }
   }
+});
+
+test('compact rank table preserves duplicate ranks, absent pairs, large IDs and legacy merge format', async () => {
+  const source = await readFile(path.join(root, 'node_modules/@huggingface/tokenizers/dist/tokenizers.mjs'), 'utf8');
+  const { Tokenizer } = await import(`data:text/javascript;base64,${Buffer.from(patchTokenizerSource('tokenizers', source, '0.1.3')).toString('base64')}`);
+  const merges = [['a', 'b'], ['missing', 'a'], ['ab', 'ab'], ['a', 'b'], ['b', 'a']];
+  for (const rules of [merges, merges.map(pair => pair.join(' '))]) {
+    const data = { model: { type: 'BPE', vocab: { a: 0, b: 1, ab: 300000 }, merges: rules },
+      normalizer: null, pre_tokenizer: null, post_processor: null, decoder: null,
+      added_tokens: [{ content: 'missing', id: 2, special: false }] };
+    const tokenizer = { _tokenizer: new Tokenizer(data, {}) };
+    const model = tokenizer._tokenizer.model;
+    const layout = releaseBpeSource(tokenizer);
+    assert.equal(layout.fallbackRankCount, 1);
+    assert.equal(model.rank_for_pair('a', 'b'), 3, 'last duplicate rule wins');
+    assert.equal(model.rank_for_pair('missing', 'a'), 1);
+    assert.equal(model.rank_for_pair('ab', 'ab'), 2, 'keys above 32 bits stay exact');
+    assert.equal(model.rank_for_pair('b', 'a'), 4);
+    assert.equal(model.rank_for_pair('a', 'ab'), undefined);
+    assert.equal(model.rank_for_pair('missing', 'missing'), undefined);
+    assert.equal(data.model.merges, rules);
+  }
+  const data = { model: { type: 'BPE', vocab: { a: 0, b: 1 }, merges: [['a', 'b']] },
+    normalizer: null, pre_tokenizer: null, post_processor: null, decoder: null,
+    added_tokens: [{ content: 'a', id: 2, special: true }] };
+  assert.throws(() => releaseBpeSource({ _tokenizer: new Tokenizer(data, {}) }), /changes a base BPE/);
+  data.added_tokens = [{ content: 'alias', id: 0, special: false }];
+  assert.throws(() => releaseBpeSource({ _tokenizer: new Tokenizer(data, {}) }), /changes a base BPE/);
 });
 
 test('build patch rejects changed source or dependency version', async () => {

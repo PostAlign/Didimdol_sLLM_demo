@@ -1,4 +1,5 @@
 // No ORT/GPU imports: both the application and tokenizer diagnostic use this loader.
+import { releaseBpeSource } from './tokenizer-memory.js';
 export const LOAD_ORDER = 'tokenizer-before-session';
 
 export function jsMemory() {
@@ -66,16 +67,23 @@ export async function prepareTokenizer({ createTokenizer, baseURL, build, checkp
   const files = [config.details, data.details];
   await observe('tokenizer-create-start', { ...identity, tokenizerClass: config.value.tokenizer_class });
   let tokenizer;
-  try { tokenizer = createTokenizer(data.value, config.value); }
+  let memoryLayout;
+  try {
+    tokenizer = createTokenizer(data.value, config.value);
+    memoryLayout = releaseBpeSource(tokenizer);
+  }
   catch (error) {
     await observe('tokenizer-error', { ...identity, observedDuring: 'tokenizer-create-start',
       message: String(error), errorType: error.name });
     throw error;
   }
-  // Upstream retains parsed JSON. Do not delete its vocabulary/configuration fields.
+  // The compact runtime now owns the required lookup structures. Dropping these
+  // references makes construction data collectible; it does not force browser GC.
   data = null; config = null;
   const summary = { ...identity, files, durationMs: performance.now() - started,
-    vocabSize: tokenizer._tokenizer.model.vocab.length, mergeCount: tokenizer._tokenizer.model.merges?.length ?? null };
+    vocabSize: tokenizer._tokenizer.model.vocab.length,
+    mergeCount: tokenizer._tokenizer.model.mergeCount ?? tokenizer._tokenizer.model.merges?.length ?? null,
+    memoryLayout };
   await observe('tokenizer-create-complete', summary);
   await observe('tokenizer-ready', summary);
   return { tokenizer, summary };

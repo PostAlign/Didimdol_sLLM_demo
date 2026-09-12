@@ -9,11 +9,11 @@ import { patchTokenizerSource } from './tokenizer-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const mode = process.argv[2];
-if (['baseline', 'patched'].includes(mode)) {
+if (['baseline', 'incremental', 'patched'].includes(mode)) {
   const moduleURL = new URL('../node_modules/@huggingface/tokenizers/dist/tokenizers.mjs', import.meta.url);
   const loadClass = async () => {
     if (mode === 'baseline') return (await import(moduleURL)).Tokenizer;
-    const source = patchTokenizerSource('tokenizers', await readFile(moduleURL, 'utf8'), '0.1.3');
+    const source = patchTokenizerSource('tokenizers', await readFile(moduleURL, 'utf8'), '0.1.3', { compact: mode === 'patched' });
     return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).Tokenizer;
   };
   const Tokenizer = await loadClass();
@@ -27,10 +27,11 @@ if (['baseline', 'patched'].includes(mode)) {
   });
   global.gc();
   console.log(JSON.stringify({ mode, node: process.version, baseline, maxRSSBytes: process.resourceUsage().maxRSS * 1024,
-    retained: process.memoryUsage(), durationMs: result.summary.durationMs, vocabSize: result.tokenizer._tokenizer.model.vocab.length, samples }));
+    retained: process.memoryUsage(), durationMs: result.summary.durationMs, vocabSize: result.tokenizer._tokenizer.model.vocab.length,
+    memoryLayout: result.summary.memoryLayout, samples }));
 } else {
   const runs = [];
-  for (let repeat = 1; repeat <= 3; repeat++) for (const mode of ['baseline', 'patched']) {
+  for (let repeat = 1; repeat <= 3; repeat++) for (const mode of ['baseline', 'incremental', 'patched']) {
     const { stdout } = await promisify(execFile)(process.execPath, ['--expose-gc', path.join(root, 'tools/measure-tokenizer.mjs'), mode]);
     runs.push({ repeat, ...JSON.parse(stdout) });
   }
