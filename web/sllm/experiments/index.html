@@ -14,9 +14,13 @@
 <option value="evaluation">6. 같은 세션에서 100건 평가 2회</option>
 </select></label>
 <label>런타임 <select id="mode"><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
+<label>전송 크기 <select id="staging"><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
+<label>전체 모델 로드 반복 <select id="repeats"><option value="1">1회</option><option value="3">3회</option></select></label>
+<label>검사기 연결 <select id="inspector"><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
+<p>전송 크기는 임시 버퍼 크기를 바꿉니다. 전체 가중치의 GPU 상주량 약 1,023 MiB는 동일합니다. 작은 모델 실험은 실행 후 120초 동안 관찰합니다.</p>
 <p><button id="start">실험 시작</button><button id="stop" disabled>중단</button><button id="export">진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>
 <table><thead><tr><th>실험</th><th>결과</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table>
 <pre id="last"></pre>
 <p><a href="../../../index.html">평가 화면</a> · <a href="./baseline.html">이전 파일 크기 비교 실험</a></p>
-<script type="module" src="./device-runner.js"></script></html>
+<script type="module" src="./bootstrap.js"></script></html>

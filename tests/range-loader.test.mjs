@@ -24,7 +24,7 @@ test('HTTP rejects ignored Range and detects short bodies', async () => {
   await assert.rejects(short.readRangeInto('w', 4, 4, new Uint8Array(4)), /Short/);
 });
 
-function fixture(size = 10 * 2**20) {
+function fixture(size = 10 * 2**20, stagingMiB = 8) {
   const bytes = new Uint8Array(size + 13);
   for (let i = 0; i < size; i++) bytes[i + 13] = i % 251;
   const file = new Blob([bytes]);
@@ -48,7 +48,7 @@ function fixture(size = 10 * 2**20) {
       async onSubmittedWorkDone() { await Promise.resolve(); pending = false; },
     },
   };
-  const loader = new SessionRangeLoader({ manifest, stagingMiB: 8,
+  const loader = new SessionRangeLoader({ manifest, stagingMiB,
     checkpoint: async () => { await Promise.resolve(); checkpointDone = true; } });
   return { loader, bytes, uploaded, writes,
     request: { location: 'w', file, offset: 13, length: size, target: 123, loadType: 1,
@@ -121,4 +121,60 @@ test('device-lost is emitted only after durable persistence finishes', async () 
   release(); await f.loader.lossSaved;
   assert.equal(emitted, true);
   await assert.rejects(f.loader.load(f.request), /device lost/);
+});
+
+test('2/4/8 MiB transfers preserve every byte and keep the same destination allocation', async () => {
+  for (const stagingMiB of [2, 4, 8]) {
+    const f = fixture(10 * 2**20, stagingMiB);
+    await f.loader.load(f.request);
+    assert.deepEqual(f.uploaded, f.bytes.subarray(13));
+    assert.equal(f.loader.metrics.gpuWeightAllocated, 10 * 2**20);
+    assert.equal(f.loader.metrics.gpuWeightUploaded, 10 * 2**20);
+    assert.equal(f.loader.metrics.gpuWeightBufferCount, 1);
+    assert.ok(f.writes.every(write => write.length <= stagingMiB * 2**20));
+    assert.equal(f.loader.metrics.gpuWriteCalls, f.writes.length);
+  }
+});
+
+test('upload completion excludes pending writes and GPU timings exclude checkpoint latency', async () => {
+  const f = fixture();
+  let clock = 0, release, entered;
+  const firstWait = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const checkpoint = f.loader.checkpoint;
+  f.loader.clock = () => clock;
+  f.loader.checkpoint = async record => { await checkpoint(record); clock += 100; };
+  const write = f.request.gpu.device.queue.writeBuffer;
+  f.request.gpu.device.queue.writeBuffer = (...args) => { write(...args); clock += 3; };
+  const wait = f.request.gpu.device.queue.onSubmittedWorkDone;
+  let waits = 0;
+  f.request.gpu.device.queue.onSubmittedWorkDone = async () => {
+    if (++waits === 1) { entered(); await gate; }
+    clock += 7; await wait();
+  };
+  const loading = f.loader.load(f.request);
+  await firstWait;
+  assert.equal(f.loader.metrics.gpuWeightAllocated, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuWeightUploaded, 0);
+  assert.equal(f.writes.length, 1);
+  release(); await loading;
+  assert.equal(f.loader.metrics.gpuWeightUploaded, 10 * 2**20);
+  assert.equal(f.loader.metrics.gpuWriteMs, 6);
+  assert.equal(f.loader.metrics.gpuWaitMs, 14);
+  assert.equal(f.loader.metrics.gpuWaitPeakMs, 7);
+});
+
+test('queue errors are persisted with their operation before cleanup can fail', async () => {
+  const f = fixture(16), records = [];
+  const checkpoint = f.loader.checkpoint;
+  f.loader.checkpoint = async record => { records.push(structuredClone(record)); await checkpoint(record); };
+  f.request.gpu.device.queue.onSubmittedWorkDone = async () => { throw new Error('queue rejected'); };
+  f.request.gpu.device.popErrorScope = async () => { throw new Error('cleanup rejected'); };
+  await assert.rejects(f.loader.load(f.request), /queue rejected/);
+  const fault = records.find(record => record.stage === 'loader-error');
+  assert.equal(fault.operation, 'onSubmittedWorkDone');
+  assert.equal(fault.message, 'queue rejected');
+  assert.equal(fault.metrics.gpuWeightUploaded, 0);
+  assert.equal(f.loader.busy, false);
+  f.loader.close(false);
 });

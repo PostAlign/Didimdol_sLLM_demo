@@ -1,3 +1,4 @@
+import { errorDetails } from './diagnostics.js';
 /** Allocation requests and explicit destroy calls, not physical GPU/process RAM. */
 export async function installGpuTracking(largestTensorBytes, emit = () => {}) {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -6,22 +7,31 @@ export async function installGpuTracking(largestTensorBytes, emit = () => {}) {
     throw new Error('Largest tensor exceeds WebGPU device limits');
   }
   let device;
-  const ledger = { requestedCurrent: 0, requestedPeak: 0, mappedUploadRequested: 0, bufferCount: 0, deviceLost: null, lastError: null };
+  const ledger = { requestedCurrent: 0, requestedPeak: 0, mappedUploadRequested: 0, bufferCount: 0,
+    liveBufferCount: 0, peakLiveBufferCount: 0, deviceLost: null, lastError: null, firstError: null };
   function track(created) {
     device = created;
     const create = device.createBuffer.bind(device);
     device.createBuffer = descriptor => {
       emit({ stage: 'gpu-create-buffer-start', bytes: descriptor.size, totalAllocated: ledger.requestedCurrent });
-      const buffer = create(descriptor);
+      let buffer;
+      try { buffer = create(descriptor); }
+      catch (error) {
+        const details = { ...errorDetails(error), operation: 'createBuffer', bytes: descriptor.size };
+        ledger.firstError ||= details; ledger.lastError = details.message;
+        emit({ stage: 'gpu-error', ...details }); throw error;
+      }
       ledger.requestedCurrent += descriptor.size;
       ledger.requestedPeak = Math.max(ledger.requestedPeak, ledger.requestedCurrent);
       ledger.bufferCount++;
+      ledger.liveBufferCount++;
+      ledger.peakLiveBufferCount = Math.max(ledger.peakLiveBufferCount, ledger.liveBufferCount);
       if (descriptor.mappedAtCreation) ledger.mappedUploadRequested += descriptor.size;
       emit({ stage: 'gpu-create-buffer', bytes: descriptor.size, totalAllocated: ledger.requestedCurrent });
       const destroy = buffer.destroy.bind(buffer);
       let destroyed = false;
       buffer.destroy = () => {
-        if (!destroyed) { ledger.requestedCurrent -= descriptor.size; destroyed = true; }
+        if (!destroyed) { ledger.requestedCurrent -= descriptor.size; ledger.liveBufferCount--; destroyed = true; }
         destroy();
       };
       return buffer;
@@ -32,7 +42,9 @@ export async function installGpuTracking(largestTensorBytes, emit = () => {}) {
     });
     device.addEventListener('uncapturederror', event => {
       ledger.lastError = event.error.message;
-      emit({ stage: 'gpu-uncaptured-error', message: event.error.message });
+      const details = errorDetails(event.error);
+      ledger.firstError ||= details;
+      emit({ stage: 'gpu-uncaptured-error', ...details });
     });
     return device;
   }

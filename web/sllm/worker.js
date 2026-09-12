@@ -5,7 +5,7 @@ const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || '
 const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
-import { RunDiagnostics, newRunId } from './diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity } from './diagnostics.js';
 import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 
@@ -79,6 +79,7 @@ async function mountWeights(manifest) {
     out.push({ path: file.location, data: weightStore.descriptor(file) });
   }
   weightStore.finishPreparation();
+  await journal.checkpoint({ stage: 'weights-prepared', storage: { ...weightStore.metrics } });
   post({ type: 'dl', which: 'model', status: 'done' });
   return out;
 }
@@ -156,6 +157,9 @@ async function load({ device: preferred, stagingMiB = 8 }) {
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', verifiedGraph)),
     b => b.toString(16).padStart(2, '0')).join('');
   if (hash !== manifest.graphSha256) throw new Error('Graph/initializer manifest SHA-256 mismatch');
+  await journal.checkpoint({ stage: 'graph-verified', graphSha256: hash, revision: REVISION, graphBytes: verifiedGraph.byteLength,
+    expectedInitializerCount: manifest.initializers.filter(t => t.location).length,
+    expectedGpuResidentBytes: manifest.totalExternalTensorBytes });
   console.info('[MODEL] graph loaded', { bytes: verifiedGraph.byteLength, sha256: hash });
   // Ensure from_pretrained consumes the verified graph via env.fetch rather
   // than bypassing it with a separately cached graph response.
@@ -164,11 +168,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
   const externalData = await mountWeights(manifest);
   const tracked = trackedGpu = await installGpuTracking(manifest.largestInitializerBytes, record => {
     if (trace) console.info('[GPU]', record);
-    if (record.stage === 'gpu-uncaptured-error') void journal.checkpoint(record);
+    if (['gpu-uncaptured-error', 'gpu-error'].includes(record.stage)) void journal.checkpoint({
+      initializerName: journal.state.last?.initializerName, observedDuring: journal.state.last?.stage, ...record,
+      gpuLedger: trackedGpu ? { ...trackedGpu.ledger } : null });
   });
   const started = performance.now();
   const loader = new SessionRangeLoader({
     manifest, stagingMiB, signal: loadController.signal,
+    gpuLedger: () => ({ ...tracked.ledger }),
     checkpoint: record => journal.checkpoint(record),
     emit: record => {
       if (trace) console.info(`[${record.stage.startsWith('gpu') ? 'GPU' : record.stage.startsWith('wasm') ? 'WASM' :
@@ -397,10 +404,10 @@ self.onmessage = async ({ data }) => {
   operation = data.type;
   aborted = false;
   if (operation === 'load') loadController = new AbortController();
-  journal = new RunDiagnostics(data.runId || newRunId(), { userAgent: navigator.userAgent, runtimeMode,
-    stagingMiB: data.stagingMiB || 8, ...data.environment });
+  journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent, runtimeMode,
+    stagingMiB: operation === 'load' ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8, workerURL: self.location.href });
   try {
-    journal.state.environment.build = runtimeBuild;
+    journal.state.environment.build = buildIdentity(runtimeBuild);
     await journal.checkpoint({ stage: `${operation}-start` });
     if (data.type === 'load') {
       if (model) throw new Error('A model is already loaded in this worker');

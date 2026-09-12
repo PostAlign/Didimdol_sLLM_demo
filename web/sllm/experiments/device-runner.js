@@ -1,4 +1,5 @@
-import { newRunId, readRun, saveCheckpoint, runKey } from '../diagnostics.js';
+import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity } from '../diagnostics.js';
+import { runtimeRelease } from '../ort-runtime.js';
 
 const $ = id => document.getElementById(id);
 const key = 'didimdol.device-experiments.v2';
@@ -8,10 +9,13 @@ state ||= { results: [], active: null, device: '', mode: 'asyncify' };
 const save = () => sessionStorage.setItem(key, JSON.stringify(state));
 let worker, sessionResult, evaluationCount = 0;
 $('device').value = state.device; $('mode').value = state.mode;
+$('staging').value = String(state.stagingMiB || 8);
+$('inspector').value = state.inspector || 'unknown';
+$('repeats').value = String(state.repeats || 1);
 function render() {
   $('rows').replaceChildren(...state.results.map(result => {
     const tr = document.createElement('tr');
-    for (const value of [result.kind, result.interrupted ? '중단 (원인 미확인)' : result.success ? '성공' : result.cancelled ? '사용자 중단' : '실패',
+    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB`, result.interrupted ? '중단 (원인 미확인)' : result.success ? '성공' : result.cancelled ? '사용자 중단' : '실패',
       result.durationMs == null ? '—' : `${(result.durationMs / 1000).toFixed(1)}초`]) {
       const td = document.createElement('td'); td.textContent = value; tr.append(td);
     }
@@ -20,6 +24,7 @@ function render() {
 }
 if (state.active) {
   const diagnostic = await readRun(state.active.runId);
+  await recordRecovery(diagnostic, { visibility: document.visibilityState, experiment: state.active.kind });
   const kind = state.active.kind;
   const storage = diagnostic?.summary?.storage;
   const success = !diagnostic?.fault && ((kind === 'load' && diagnostic?.status === 'ready') ||
@@ -61,25 +66,50 @@ async function finish(result) {
   state.active = null;
   await closeWorker(active, result);
   const diagnostic = await readRun(active.runId);
-  state.results.push({ ...active, ...result, durationMs: Date.now() - active.startedAt, sessionResult });
+  if (diagnostic?.fault && !result.cancelled) { result.success = false; result.error ||= diagnostic.fault.message || diagnostic.fault.stage; }
+  state.results.push({ ...active, ...result, releaseId: diagnostic?.environment?.build?.releaseId || active.releaseId,
+    durationMs: Date.now() - active.startedAt, sessionResult });
   if (state.results.length > 30) state.results.shift();
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;
+  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind']) $(id).disabled = false;
   $('status').textContent = result.success ? '실험 완료' : result.cancelled ? '사용자가 중단했습니다.' : '실험 실패 · 진단 JSON을 저장해 주세요.';
   $('last').textContent = JSON.stringify({ ...state.results.at(-1), diagnostic }, null, 2);
-  if (result.success && active.remaining > 1) reloadFor({ kind: active.kind, remaining: active.remaining - 1 });
+  if (result.success && active.remaining > 1) reloadFor({ kind: active.kind, remaining: active.remaining - 1,
+    mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
+    reportedDevice: active.reportedDevice, releaseId: active.releaseId });
 }
 async function begin(config) {
   if (state.active) return;
+  config = { mode: state.mode, stagingMiB: 8, inspector: 'unknown', reportedDevice: state.device, ...config };
   const runId = newRunId();
   state.active = { ...config, runId, runIds: [runId], startedAt: Date.now() }; save();
-  $('start').disabled = true; $('stop').disabled = false;
+  // A stop becomes available after the initial journal write and worker creation,
+  // so startup persistence cannot overwrite a just-recorded cancellation.
+  $('start').disabled = true; $('stop').disabled = true;
+  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind']) $(id).disabled = true;
   $('status').textContent = '실험 준비 중…';
   sessionResult = null; evaluationCount = 0;
-  const environment = { reportedDevice: state.device, userAgent: navigator.userAgent, experiment: config.kind };
+  let release;
+  try {
+    release = await runtimeRelease();
+    if (config.releaseId && config.releaseId !== release.build.releaseId) throw new Error('반복 실행 중 빌드가 변경됐습니다. 같은 빌드로 실험을 다시 시작해 주세요.');
+  } catch (error) {
+    if (!state.active) return;
+    const fault = { stage: 'build-error', message: error.message, timestamp: Date.now() };
+    await saveCheckpoint({ schemaVersion: 3, runId, status: 'failed', fault, last: fault }, runKey(runId));
+    await finish({ success: false, error: error.message }); return;
+  }
+  if (!state.active) return;
+  state.active.releaseId = release.build.releaseId; save();
+  const environment = { reportedDevice: config.reportedDevice, userAgent: navigator.userAgent, experiment: config.kind,
+    inspector: config.inspector, stagingMiB: config.stagingMiB, runtimeMode: config.mode, idleSeconds: 120 };
+  await saveCheckpoint({ schemaVersion: 3, runId, status: 'running', environment: { ...environment, build: buildIdentity(release.build) },
+    last: { stage: 'worker-start', timestamp: Date.now() } }, runKey(runId));
+  if (!state.active) return;
   const simple = ['resident', 'runtime'].includes(config.kind);
   const url = new URL(simple ? './device-probes.js' : '../worker.js', import.meta.url);
-  url.searchParams.set('ortMode', state.mode);
+  url.searchParams.set('ortMode', config.mode);
   worker = new Worker(url, { type: 'module' });
   worker.onerror = async event => {
     const run = await readRun(state.active?.runId);
@@ -93,7 +123,7 @@ async function begin(config) {
   };
   worker.onmessage = async ({ data }) => {
     if (!state.active) return;
-    if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 8, runId, environment });
+    if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
     if (data.type === 'phase') $('status').textContent = data.text;
     if (data.type === 'progress') { $('status').textContent = data.record.stage; $('last').textContent = JSON.stringify(data.record, null, 2); }
     if (data.type === 'dl') $('status').textContent = `모델 준비 ${Math.round((data.loaded || 0) / 2**20)} MiB`;
@@ -120,12 +150,15 @@ async function begin(config) {
     if (data.type === 'fatal') await finish({ success: false, error: data.error, cancelled: data.cancelled });
     if (data.type === 'aborted') await finish({ success: false, cancelled: true });
   };
-  if (simple) worker.postMessage({ kind: config.kind, runId, environment, mode: state.mode });
+  if (simple) worker.postMessage({ kind: config.kind, runId, environment, mode: config.mode, stagingMiB: config.stagingMiB });
+  $('stop').disabled = false;
 }
 $('start').onclick = () => {
   state.device = $('device').value; state.mode = $('mode').value;
+  state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   const kind = $('kind').value;
-  reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : 1 });
+  reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : kind === 'load' ? state.repeats : 1,
+    mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, reportedDevice: state.device });
 };
 $('stop').onclick = async () => {
   const active = state.active;
@@ -139,7 +172,7 @@ $('export').onclick = async () => {
   const ids = new Set(state.results.flatMap(result => result.runIds || [result.runId]));
   for (const id of state.active?.runIds || []) ids.add(id);
   const runs = await Promise.all([...ids].map(readRun));
-  const blob = new Blob([JSON.stringify({ ...state, userAgent: navigator.userAgent,
+  const blob = new Blob([JSON.stringify({ ...state, schemaVersion: 3, exportedAt: new Date().toISOString(), userAgent: navigator.userAgent,
     memoryNote: 'Logical allocation counters are not process RSS. Device logs are needed to confirm termination causes.',
     runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

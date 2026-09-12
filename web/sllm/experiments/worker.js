@@ -2,6 +2,7 @@ import { SessionRangeLoader } from '../range-loader.js';
 import { installGpuTracking } from '../gpu-device.js';
 import { saveCheckpoint } from '../diagnostics.js';
 import { OpfsWeightStore } from '../opfs-store.js';
+import { loadOrt } from '../ort-runtime.js';
 
 function shardResponse(shards, resolve) {
   let reader, index = 0;
@@ -28,14 +29,8 @@ self.onmessage = async ({ data: config }) => {
   const result = { ...config.experiment, success: false, startedAt: Date.now(), pageReloadObserved: false };
   try {
     const mode = config.mode || (config.experiment.kind === 'stock' ? 'stock' : 'asyncify');
-    const ort = await import(`../../vendor/ort.${mode}.mjs`);
-    const stem = mode === 'stock' ? 'stock-ort-wasm-simd-threaded.asyncify' : `ort-wasm-simd-threaded.${mode}`;
-    ort.env.wasm.wasmPaths = {
-      mjs: new URL(`../../vendor/${stem}.mjs`, import.meta.url).href,
-      wasm: new URL(`../../vendor/${stem}.wasm`, import.meta.url).href,
-    };
-    ort.env.wasm.numThreads = 1;
-    ort.env.wasm.proxy = false;
+    const { ort, build } = await loadOrt(mode);
+    result.releaseId = build.releaseId;
     const response = await fetch(config.source);
     if (!response.ok) throw new Error(`Experiment manifest HTTP ${response.status}`);
     const description = await response.json();

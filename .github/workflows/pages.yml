@@ -56,7 +56,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: web/vendor
-          key: ort-range-v2-mobile-${{ runner.os }}-${{ hashFiles('patches/**', 'model/required-operators.config', 'tools/build-ort.sh', 'tools/build-runtime.mjs', 'package-lock.json', 'requirements-tools.txt') }}
+          key: ort-range-v3-release-${{ runner.os }}-${{ hashFiles('patches/**', 'model/required-operators.config', 'tools/build-ort.sh', 'tools/build-runtime.mjs', 'tools/record-ort-build.mjs', 'package-lock.json', 'requirements-tools.txt') }}
 
       - name: Build pinned ORT fork (Asyncify and JSPI)
         if: steps.ort-cache.outputs.cache-hit != 'true'
@@ -65,9 +65,13 @@ jobs:
           bash tools/build-ort.sh asyncify
           bash tools/build-ort.sh jspi
 
+      - name: Package current application with cached native runtime
+        run: npm run release
+
       - name: Verify runtime
         run: |
           npm test
+          npm run verify:release
           .venv/bin/python3 -m unittest discover -s tests -p 'test_*.py'
           .venv/bin/python3 tools/make_test_model.py
           .venv/bin/python3 tools/prepare_experiments.py .work/test-model .work/test-experiments
@@ -96,6 +100,9 @@ jobs:
           echo
           du -sh _site
 
+      - name: Verify assembled release
+        run: npm run verify:release -- _site
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -108,6 +115,14 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify served release bytes
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: node tools/release.mjs verify "$SITE_URL"

@@ -11,7 +11,7 @@
  */
 
 import { ms, mb, f3, esc, setBar, makeBadge } from '../ui.js';
-import { readRun, newRunId, saveCheckpoint, runKey } from './diagnostics.js';
+import { readRun, newRunId, saveCheckpoint, runKey, recordRecovery } from './diagnostics.js';
 
 export function initSllm(root) {
   const $ = (s) => root.querySelector(s);
@@ -207,6 +207,7 @@ export function initSllm(root) {
       return;
     }
     const run = await readRun(prev.runId);
+    await recordRecovery(run, { visibility: document.visibilityState, lifecycle: lifecycle.slice(-4) });
     clearAttempt();
     if (run && !run.fault && ['ready', 'complete', 'cancelled'].includes(run.status)) return;
     const checkpoint = run?.fault || run?.last;
@@ -221,7 +222,7 @@ export function initSllm(root) {
   }
   $('#exportDiagnostics').onclick = async () => {
     const runs = await Promise.all(history.map(readRun));
-    const blob = new Blob([JSON.stringify({ schemaVersion: 2, exportedAt: new Date().toISOString(),
+    const blob = new Blob([JSON.stringify({ schemaVersion: 3, exportedAt: new Date().toISOString(),
       userAgent: navigator.userAgent, activeRun: readStored(ATTEMPT_KEY, null),
       lifecycle: readStored('didimdol.lifecycle.v2', []), runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);

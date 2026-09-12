@@ -1,0 +1,309 @@
+{
+  "recordedAt": "2026-09-12T02:28:21.818Z",
+  "environment": {
+    "platform": "Linux/WSL",
+    "browser": "Playwright Chromium",
+    "gpu": "SwiftShader",
+    "iphoneTested": false
+  },
+  "currentRelease": {
+    "releaseId": "fbb9f5c3521135f50834c3e9cc87fd756df6a54bcf463656f87aa44f710f2f9c",
+    "provenance": {
+      "appCommit": "fcdaa1880917be35d634613bf42734370681443e",
+      "appDirty": true,
+      "nodeVersion": "v22.22.1"
+    },
+    "verifiedAssets": 62,
+    "verification": [
+      "local filesystem",
+      "local HTTP with Pages-style subpath",
+      "nested manifest",
+      "landing entry files"
+    ],
+    "nativeBuildRecompiled": false,
+    "runtimeBuilds": {
+      "asyncify": {
+        "profile": "mobile",
+        "threads": false,
+        "sourceArtifact": "ort-wasm-simd.asyncify",
+        "ortCommit": "b7804b056c30aa35c1748f8e4e239d0e2ff25d6d",
+        "nativeBuild": null,
+        "wasmBytes": 18519696,
+        "wasmSha256": "7c90408eddc04941fe19e9eaca35d5200b3b7515297afe526fc4abc57273cece",
+        "patchSha256": "755113af50740813168d8de68a749ec93a0ef933ee4ae9a288707f239356c0e9",
+        "operatorsSha256": "04113cce236fe707559bfd7d1d06efe13df597b5734400b9403756979fc30ce7"
+      },
+      "jspi": {
+        "profile": "mobile",
+        "threads": false,
+        "sourceArtifact": "ort-wasm-simd.jspi",
+        "wasmBytes": 9373759,
+        "wasmSha256": "a453d93212291ed29343f8cfc7bb9d42c500c648ca3096b392aa9152f5367d06",
+        "patchSha256": "755113af50740813168d8de68a749ec93a0ef933ee4ae9a288707f239356c0e9",
+        "operatorsSha256": "04113cce236fe707559bfd7d1d06efe13df597b5734400b9403756979fc30ce7"
+      }
+    }
+  },
+  "checks": {
+    "javascriptTests": 22,
+    "pythonTests": 2,
+    "allPassed": true,
+    "browserDiagnostics": [
+      "schema-2 compatibility",
+      "schema-3 recovery preserves last/fault",
+      "per-tab isolation",
+      "known faults override successful recovery",
+      "stop and JSON export",
+      "2 MiB settings retained during inference",
+      "repeat stops on release change"
+    ],
+    "runtimeBuild": "npm run build",
+    "finalBrowserCommand": "ORT_MODES=asyncify TEST_APP_LOAD=1 npm run test:browser"
+  },
+  "currentReleaseResults": [
+    {
+      "id": "smoke-asyncify",
+      "success": true,
+      "releaseId": "fbb9f5c3521135f50834c3e9cc87fd756df6a54bcf463656f87aa44f710f2f9c",
+      "stagingMiB": 8,
+      "sessionCreateMs": 433.09999999403954,
+      "loadedInitializerCount": 2,
+      "gpuWeightUploaded": 10496000,
+      "inferenceVerified": true
+    },
+    {
+      "id": "resident-asyncify",
+      "success": true,
+      "releaseId": "fbb9f5c3521135f50834c3e9cc87fd756df6a54bcf463656f87aa44f710f2f9c",
+      "stagingMiB": 4
+    },
+    {
+      "id": "runtime-asyncify",
+      "success": true,
+      "releaseId": "fbb9f5c3521135f50834c3e9cc87fd756df6a54bcf463656f87aa44f710f2f9c",
+      "stagingMiB": 4,
+      "loadedInitializerCount": 2,
+      "gpuWeightUploaded": 10496000,
+      "inferenceVerified": true,
+      "idleSeconds": 0,
+      "idleElapsedMs": 0,
+      "idleAcceptanceCompleted": false
+    },
+    {
+      "id": "app-from-pretrained",
+      "success": true,
+      "releaseId": "fbb9f5c3521135f50834c3e9cc87fd756df6a54bcf463656f87aa44f710f2f9c",
+      "stagingMiB": 2,
+      "loadedInitializerCount": 251,
+      "gpuWeightUploaded": 1072392704,
+      "cleanupVerified": true,
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 14232.09999999404,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 32618.19999998808,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ]
+    },
+    {
+      "id": "diagnostic-ui",
+      "success": true
+    }
+  ],
+  "earlierValidation": {
+    "note": "Earlier snapshots in this change; retained to identify the exact tested release. Final targeted run covers the subsequent startup/fault-context/session-setting fixes.",
+    "allModesAndFullModel": [
+      {
+        "id": "smoke-asyncify",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 8,
+        "sessionCreateMs": 421.2000000178814,
+        "loadedInitializerCount": 2,
+        "gpuWeightUploaded": 10496000,
+        "inferenceVerified": true
+      },
+      {
+        "id": "resident-asyncify",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 4
+      },
+      {
+        "id": "runtime-asyncify",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 4,
+        "loadedInitializerCount": 2,
+        "gpuWeightUploaded": 10496000,
+        "inferenceVerified": true,
+        "idleSeconds": 0,
+        "idleElapsedMs": 0,
+        "idleAcceptanceCompleted": false
+      },
+      {
+        "id": "smoke-jspi",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 8,
+        "sessionCreateMs": 223.19999998807907,
+        "loadedInitializerCount": 2,
+        "gpuWeightUploaded": 10496000,
+        "inferenceVerified": true
+      },
+      {
+        "id": "runtime-jspi",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 4,
+        "loadedInitializerCount": 2,
+        "gpuWeightUploaded": 10496000,
+        "inferenceVerified": true,
+        "idleSeconds": 0,
+        "idleElapsedMs": 0,
+        "idleAcceptanceCompleted": false
+      },
+      {
+        "id": "smoke-stock",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 8,
+        "sessionCreateMs": 396.7000000178814,
+        "loadedInitializerCount": 2,
+        "inferenceVerified": true
+      },
+      {
+        "id": "app-from-pretrained",
+        "success": true,
+        "stagingMiB": 8,
+        "loadedInitializerCount": 251,
+        "gpuWeightUploaded": 1072392704,
+        "cleanupVerified": true,
+        "outputs": [
+          {
+            "row": 3,
+            "promptLen": 35,
+            "durationMs": 14309.300000011921,
+            "tokens": [
+              238789,
+              236764
+            ]
+          },
+          {
+            "row": 95,
+            "promptLen": 266,
+            "durationMs": 31660.30000001192,
+            "tokens": [
+              238789,
+              236764
+            ]
+          }
+        ]
+      },
+      {
+        "id": "Gemma-FP32-8MiB",
+        "success": true,
+        "releaseId": "0d37f350e5cf143d237354a379288e4ef77a76c772af6c36f560cc2948617a19",
+        "stagingMiB": 8,
+        "sessionCreateMs": 6904.5,
+        "loadedInitializerCount": 251,
+        "gpuWeightUploaded": 1072392704,
+        "inferenceVerified": true,
+        "decode": [
+          {
+            "step": 0,
+            "token": 1106,
+            "ms": 5169.800000011921
+          },
+          {
+            "step": 1,
+            "token": 4940,
+            "ms": 3344.199999988079
+          }
+        ]
+      },
+      {
+        "id": "diagnostic-ui",
+        "success": true
+      }
+    ],
+    "fullIdleObservation": {
+      "id": "runtime-asyncify",
+      "success": true,
+      "releaseId": "9d5c57089f0b6a06aaae46bfe92476467ff7ceeff7bf5d27eb9799a4dec8373c",
+      "stagingMiB": 4,
+      "loadedInitializerCount": 2,
+      "gpuWeightUploaded": 10496000,
+      "inferenceVerified": true,
+      "idleSeconds": 120,
+      "idleElapsedMs": 120363.79999998212,
+      "idleAcceptanceCompleted": true
+    }
+  },
+  "diagnosticOverhead": {
+    "environment": "Local headless Chromium, synthetic 251-initializer IndexedDB workload; not GPU loading or iPhone memory measurement",
+    "baselineCommit": "fcdaa1880917be35d634613bf42734370681443e",
+    "measurements": [
+      {
+        "implementation": "before",
+        "checkpoints": 756,
+        "durationMs": 662.6999999880791,
+        "finalSnapshotBytes": 27702
+      },
+      {
+        "implementation": "after",
+        "checkpoints": 756,
+        "durationMs": 840.2000000178814,
+        "finalSnapshotBytes": 59534,
+        "persistence": {
+          "completed": 756,
+          "failures": 0,
+          "totalMs": 814.8999998271465,
+          "peakMs": 2.7000000178813934,
+          "note": "Timings cover completed writes before this snapshot; they are excluded from GPU operation timings."
+        }
+      },
+      {
+        "implementation": "after",
+        "checkpoints": 756,
+        "durationMs": 879.5,
+        "finalSnapshotBytes": 59534,
+        "persistence": {
+          "completed": 756,
+          "failures": 0,
+          "totalMs": 853.7999998927116,
+          "peakMs": 3.7000000178813934,
+          "note": "Timings cover completed writes before this snapshot; they are excluded from GPU operation timings."
+        }
+      },
+      {
+        "implementation": "before",
+        "checkpoints": 756,
+        "durationMs": 625.0999999940395,
+        "finalSnapshotBytes": 27702
+      }
+    ],
+    "note": "Two samples per implementation during local validation. This is an indicative synthetic persistence comparison, not a controlled phone benchmark."
+  },
+  "limitations": [
+    "No iPhone restart/OOM resolution claim; device experiments and system logs are still required.",
+    "All weights remain FP32 and resident on GPU. Smaller transfers do not reduce the approximately 1023 MiB total.",
+    "Full model tests stream the unchanged local model and override the incognito storage quota to 8 GiB.",
+    "Five full-model cached loads and two 100-row evaluations were not executed on a handset.",
+    "Native binaries were reused; only application/runtime JS bundling and release packaging ran locally. Compiler provenance capture was fixture-tested.",
+    "No deployment was performed; post-deployment verification is configured in the Pages workflow."
+  ]
+}

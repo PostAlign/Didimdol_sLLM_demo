@@ -1,15 +1,19 @@
 import { BlobTensorSource, checkedRange } from './external-source.js';
+import { errorDetails } from './diagnostics.js';
 
-export const STAGING_MIB = [8, 16, 32, 64];
+export const STAGING_MIB = [2, 4, 8, 16, 32, 64];
 
 /** Called inside OrtCreateSession by the patched EM_ASYNC_JS bridge. */
 export class SessionRangeLoader {
-  constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal }) {
-    if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 8, 16, 32 or 64');
+  constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal,
+    gpuLedger = () => null, clock = () => performance.now() }) {
+    if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 2, 4, 8, 16, 32 or 64');
     this.stagingBytes = stagingMiB * 2 ** 20;
     this.checkpoint = checkpoint;
     this.emit = emit;
     this.signal = signal;
+    this.gpuLedger = gpuLedger;
+    this.clock = clock;
     this.lossSaved = Promise.resolve();
     this.maxCpuTensorBytes = maxCpuTensorBytes;
     this.byRange = new Map(manifest.initializers.filter(t => t.location).map(t => [`${t.location}:${t.offset}:${t.bytes}`, t]));
@@ -24,6 +28,8 @@ export class SessionRangeLoader {
       cpuStagingCurrent: 0, cpuStagingPeak: 0, wasmTempCurrent: 0, wasmTempPeak: 0,
       wasmHeapBytes: 0, wasmHeapPeak: 0, cpuInitializerBytes: 0,
       gpuWeightAllocated: 0, gpuWeightPeak: 0,
+      gpuWeightUploaded: 0, gpuWeightBufferCount: 0, gpuWriteCalls: 0,
+      gpuWriteMs: 0, gpuWaitMs: 0, gpuWaitPeakMs: 0,
       totalExternalTensorBytes: manifest.totalExternalTensorBytes,
       loadedInitializerCount: 0, rangeReadCount: 0, deviceLost: null,
     };
@@ -32,7 +38,7 @@ export class SessionRangeLoader {
     this.emit({ stage, ...details, metrics: { ...this.metrics }, timestamp: Date.now() });
   }
   async record(stage, details = {}) {
-    await this.checkpoint({ ...this.last, ...details, stage, metrics: { ...this.metrics } });
+    await this.checkpoint({ ...this.last, ...details, stage, metrics: { ...this.metrics }, gpuLedger: this.gpuLedger() });
   }
   check() {
     this.signal?.throwIfAborted();
@@ -85,6 +91,15 @@ export class SessionRangeLoader {
     }
     this.busy = true;
     let scopes = 0;
+    let operation = 'upload-initializer', primaryError;
+    const popScope = async () => {
+      scopes--;
+      const error = await gpu.device.popErrorScope();
+      if (error) {
+        await this.record('gpu-error', { ...errorDetails(error), operation: 'upload-error-scope' });
+        throw new Error(`WebGPU upload: ${error.message}`, { cause: error });
+      }
+    };
     try {
       this.last = { initializerName: init.name, shape: init.shape, index: init.index, offset, length, location };
       this.event('initializer-start', this.last);
@@ -97,6 +112,7 @@ export class SessionRangeLoader {
         if (!this.gpuBuffers.has(gpu.buffer)) {
           this.gpuBuffers.add(gpu.buffer);
           this.metrics.gpuWeightAllocated += gpu.buffer.size;
+          this.metrics.gpuWeightBufferCount++;
           this.metrics.gpuWeightPeak = Math.max(this.metrics.gpuWeightPeak, this.metrics.gpuWeightAllocated);
           this.event('gpu-weight-buffer', { ...this.last, bytes: gpu.buffer.size });
         }
@@ -120,6 +136,7 @@ export class SessionRangeLoader {
         const data = this.scratch.subarray(0, size);
         this.check();
         const range = { fileOffset: offset + position, destinationOffset: position, chunkBytes: size };
+        operation = 'range-read';
         await this.record('range-read', range);
         this.event('range-read-start', { offset: offset + position, bytes: size });
         if (ranged) await file.readRangeInto(offset + position, size, data);
@@ -132,12 +149,24 @@ export class SessionRangeLoader {
           await this.record('gpu-write', range);
           // FP32 lengths, offsets and staging sizes are multiples of four. No
           // full-tensor MAP_WRITE buffer and no CPU-to-WASM copy on this path.
+          operation = 'writeBuffer';
+          const writeStart = this.clock();
           gpu.device.queue.writeBuffer(gpu.buffer, position, data.buffer, data.byteOffset, size);
+          range.gpuWriteMs = this.clock() - writeStart;
+          this.metrics.gpuWriteMs += range.gpuWriteMs;
+          this.metrics.gpuWriteCalls++;
           this.event('gpu-write-buffer', { offset: position, bytes: size });
           // Bound driver upload backlog too, not just JS references.
           await this.record('gpu-wait', range);
+          operation = 'onSubmittedWorkDone';
+          const waitStart = this.clock();
           await gpu.device.queue.onSubmittedWorkDone();
+          range.gpuWaitMs = this.clock() - waitStart;
+          this.metrics.gpuWaitMs += range.gpuWaitMs;
+          this.metrics.gpuWaitPeakMs = Math.max(this.metrics.gpuWaitPeakMs, range.gpuWaitMs);
           if (this.metrics.deviceLost) throw new Error('WebGPU device lost during upload');
+          // Queue completion observed, not a physical-memory or error-scope measurement.
+          this.metrics.gpuWeightUploaded += size;
         } else {
           const heap = getHeap();
           checkedRange(target + position, size, heap.byteLength);
@@ -146,18 +175,23 @@ export class SessionRangeLoader {
         this.sampleMetrics();
         await this.record('range-complete', range);
       }
-      while (scopes) {
-        scopes--;
-        const error = await gpu.device.popErrorScope();
-        if (error) throw new Error(`WebGPU upload: ${error.message}`);
-      }
+      operation = 'popErrorScope';
+      while (scopes) await popScope();
       this.completed.add(init.name);
       this.metrics.loadedInitializerCount = this.completed.size;
       await this.record('initializer-complete');
       this.event('initializer-complete', this.last);
+    } catch (error) {
+      primaryError = error;
+      await this.record('loader-error', { ...errorDetails(error), operation });
+      throw error;
     } finally {
-      while (scopes) { scopes--; await gpu.device.popErrorScope(); }
-      this.busy = false;
+      try {
+        while (scopes) {
+          try { await popScope(); }
+          catch (error) { if (!primaryError) { primaryError = error; throw error; } }
+        }
+      } finally { this.busy = false; }
     }
   }
   close(success) {

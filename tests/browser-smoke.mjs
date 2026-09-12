@@ -32,7 +32,8 @@ try {
     page.on('console', message => { if (message.type() === 'error') console.error('browser:', message.text()); });
     await page.goto(origin);
     const result = await page.evaluate(async ({ origin, mode }) => {
-      const worker = new Worker(`${origin}/web/sllm/experiments/worker.js`, { type: 'module' });
+      const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+      const worker = new Worker(asset('web/sllm/experiments/worker.js'), { type: 'module' });
       return await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => { worker.terminate(); reject(new Error('Browser test timed out')); }, 240000);
         worker.onerror = event => { clearTimeout(timeout); worker.terminate(); reject(new Error(event.message)); };
@@ -58,24 +59,27 @@ try {
       for (const kind of (mode === 'asyncify' ? ['resident', 'runtime'] : ['runtime'])) {
         const probePage = await browser.newPage();
         await probePage.goto(origin);
-        const probe = await probePage.evaluate(async ({ origin, mode, kind }) => {
-          const worker = new Worker(`${origin}/web/sllm/experiments/device-probes.js`, { type: 'module' });
+        const probe = await probePage.evaluate(async ({ origin, mode, kind, stagingMiB, idleSeconds }) => {
+          const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+          const worker = new Worker(asset('web/sllm/experiments/device-probes.js'), { type: 'module' });
           return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => { worker.terminate(); reject(new Error('Device probe timed out')); }, 120000);
+            const timer = setTimeout(() => { worker.terminate(); reject(new Error('Device probe timed out')); }, 240000);
             worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
             worker.onmessage = ({ data }) => {
               if (data.type === 'result') { clearTimeout(timer); worker.terminate(); resolve(data.result); }
             };
-            worker.postMessage({ kind, mode, fixture: true, idleSeconds: 0 });
+            worker.postMessage({ kind, mode, fixture: true, idleSeconds, stagingMiB });
           });
-        }, { origin, mode, kind });
+        }, { origin, mode, kind, stagingMiB: 4, idleSeconds: Number(process.env.TEST_IDLE_SECONDS || 0) });
         results.push({ id: `${kind}-${mode}`, ...probe });
         console.log(JSON.stringify({ id: `${kind}-${mode}`, ...probe }, null, 2));
         assert.equal(probe.success, true, probe.error);
+        assert.match(probe.releaseId, /^[a-f0-9]{64}$/);
         if (kind === 'runtime') {
           assert.equal(probe.inferenceVerified, true);
-          assert.equal(probe.metrics.cpuStagingPeak, 8 * 2**20, 'OPFS reads straight into the reusable scratch');
+          assert.equal(probe.metrics.cpuStagingPeak, 4 * 2**20, 'OPFS reads straight into the reusable scratch');
           assert.equal(probe.storage.downloadedFiles, 1, 'the diagnostic generates and verifies its own cold-cache fixture');
+          assert.equal(probe.idleAcceptanceCompleted, Number(process.env.TEST_IDLE_SECONDS || 0) >= 120);
         } else assert.equal(probe.gpuWeightAllocated, probe.expectedBytes);
         await probePage.close();
       }
@@ -108,21 +112,30 @@ try {
       }
     });
     const result = await page.evaluate(async origin => {
-      const worker = new Worker(`${origin}/web/sllm/worker.js`, { type: 'module' });
+      const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+      const worker = new Worker(asset('web/sllm/worker.js'), { type: 'module' });
+      const probeRunId = crypto.randomUUID();
       return await new Promise((resolve, reject) => {
         let sessionResult, probeResult;
         const timer = setTimeout(() => { worker.terminate(); reject(new Error('App load/probe timed out')); }, 600000);
         worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
-        worker.onmessage = ({ data }) => {
-          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu' });
+        worker.onmessage = async ({ data }) => {
+          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 2 });
           if (data.type === 'session-result') sessionResult = data.result;
           if (data.type === 'fatal') { clearTimeout(timer); worker.terminate(); reject(new Error(data.error)); }
-          if (data.type === 'ready') worker.postMessage({ type: 'probe', maxNewTokens: 2 });
+          if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2 });
           if (data.type === 'probe-result') { probeResult = data.result; worker.postMessage({ type: 'dispose' }); }
           if (data.type === 'disposed') {
             clearTimeout(timer); worker.terminate();
             if (data.error) reject(new Error(data.error));
-            else resolve({ id: 'app-from-pretrained', ...sessionResult, ...probeResult, cleanupVerified: true });
+            else {
+              try {
+                const { readRun } = await import(asset('web/sllm/diagnostics.js'));
+                const run = await readRun(probeRunId);
+                resolve({ id: 'app-from-pretrained', ...sessionResult, ...probeResult, cleanupVerified: true,
+                  probeEnvironment: run.environment });
+              } catch (error) { reject(error); }
+            }
           }
         };
       });
@@ -130,8 +143,12 @@ try {
     results.push(result);
     console.log(JSON.stringify(result, null, 2));
     assert.equal(result.success, true, result.error);
-    assert.equal(result.metrics.cpuStagingPeak, 8 * 2**20);
+    assert.equal(result.metrics.cpuStagingPeak, 2 * 2**20);
+    assert.equal(result.probeEnvironment.stagingMiB, 2, 'evaluation diagnostics keep the loaded session settings');
     assert.deepEqual(result.outputs.map(output => output.promptLen), [35, 266]);
+    assert.deepEqual(result.outputs.map(output => output.tokens), [[238789, 236764], [238789, 236764]], 'recorded FP32 real-prompt baseline');
+    assert.equal(result.metrics.loadedInitializerCount, 251);
+    assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
     await page.close();
   }
   if (process.env.TEST_FULL_MODEL === '1') {
@@ -142,7 +159,8 @@ try {
     await cdp.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 8 * 2**30 });
     page.on('console', message => { if (message.type() === 'error') console.error('full-model:', message.text()); });
     const result = await page.evaluate(async origin => {
-      const worker = new Worker(`${origin}/web/sllm/experiments/worker.js`, { type: 'module' });
+      const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+      const worker = new Worker(asset('web/sllm/experiments/worker.js'), { type: 'module' });
       return await new Promise((resolve, reject) => {
         const timer = setTimeout(() => { worker.terminate(); reject(new Error('Full model timed out')); }, 600000);
         worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
@@ -172,7 +190,8 @@ try {
       const cdp = await page.context().newCDPSession(page);
       await cdp.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 8 * 2**30 });
       const result = await page.evaluate(async ({ origin, experiment }) => {
-        const worker = new Worker(`${origin}/web/sllm/experiments/worker.js`, { type: 'module' });
+        const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+        const worker = new Worker(asset('web/sllm/experiments/worker.js'), { type: 'module' });
         return await new Promise((resolve, reject) => {
           const timer = setTimeout(() => { worker.terminate(); reject(new Error('Matrix timed out')); }, 180000);
           worker.onerror = event => { clearTimeout(timer); worker.terminate(); reject(new Error(event.message)); };
@@ -195,8 +214,9 @@ try {
   const page = await recoveryContext.newPage();
   await page.goto(origin);
   await page.evaluate(async origin => {
+    const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
     await new Promise((resolve, reject) => {
-      const worker = new Worker(`${origin}/web/sllm/worker.js`, { type: 'module' });
+      const worker = new Worker(asset('web/sllm/worker.js'), { type: 'module' });
       worker.onerror = event => { worker.terminate(); reject(new Error(event.message)); };
       worker.onmessage = ({ data }) => { if (data.type === 'worker-ready') { worker.terminate(); resolve(); } };
       setTimeout(() => { worker.terminate(); reject(new Error('App worker import timed out')); }, 30000);
@@ -210,6 +230,10 @@ try {
   await page.locator('#start:not([disabled])').waitFor();
   await page.evaluate(async () => {
     const { RunDiagnostics } = await import('/web/sllm/diagnostics.js');
+    // Original schema-2 exports stay readable after the schema-3 upgrade.
+    const { saveCheckpoint, runKey } = await import('/web/sllm/diagnostics.js');
+    await saveCheckpoint({ schemaVersion: 2, runId: 'legacy-test', status: 'running', fault: null,
+      last: { stage: 'gpu-wait', initializerName: 'legacy-weight' }, records: [] }, runKey('legacy-test'));
     const run = new RunDiagnostics('reload-test');
     await run.checkpoint({ stage: 'gpu-wait', initializerName: 'test-weight',
       metrics: { gpuWeightAllocated: 123456, loadedInitializerCount: 1 } });
@@ -219,6 +243,16 @@ try {
   await page.reload();
   await page.locator('#rows').getByText(/gpu-wait/).waitFor();
   assert.match(await page.locator('#rows').innerText(), /메모리 부족은 아직 확인되지 않았습니다/);
+  const recovery = await page.evaluate(async () => {
+    const { readRun, recordRecovery } = await import('/web/sllm/diagnostics.js');
+    await recordRecovery(await readRun('legacy-test'));
+    return { current: await readRun('reload-test'), legacy: await readRun('legacy-test') };
+  });
+  assert.equal(recovery.current.recovery.cause, 'unknown');
+  assert.equal(recovery.current.last.stage, 'gpu-wait');
+  assert.equal(recovery.legacy.schemaVersion, 2);
+  assert.equal(recovery.legacy.last.initializerName, 'legacy-weight');
+  assert.equal(recovery.legacy.recovery.classification, 'interrupted');
   const other = await page.context().newPage();
   await other.goto(`${origin}/index.html`);
   await other.locator('#start:not([disabled])').waitFor();
@@ -259,6 +293,8 @@ try {
   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).active), null);
   // Exercise the actual experiment controls, then stop during the intended idle period.
   await page.locator('#kind').selectOption('runtime');
+  await page.locator('#staging').selectOption('2');
+  await page.locator('#inspector').selectOption('detached');
   await page.locator('#start').click();
   await page.locator('#status').getByText('runtime-idle', { exact: true }).waitFor({ timeout: 120000 });
   await page.locator('#stop').click();
@@ -269,7 +305,27 @@ try {
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'));
   assert.equal(exported.results.at(-1).cancelled, true);
   assert.equal(exported.runs.find(run => run.runId === exported.results.at(-1).runId).status, 'cancelled');
-  assert.ok(exported.runs.some(run => run.runId === 'experiment-interrupted'));
+  const interrupted = exported.runs.find(run => run.runId === 'experiment-interrupted');
+  assert.equal(interrupted.status, 'running');
+  assert.equal(interrupted.last.stage, 'gpu-wait');
+  assert.equal(interrupted.recovery.classification, 'interrupted');
+  const stopped = exported.runs.find(run => run.runId === exported.results.at(-1).runId);
+  assert.equal(stopped.environment.stagingMiB, 2);
+  assert.equal(stopped.environment.inspector, 'detached');
+  assert.equal(stopped.environment.idleSeconds, 120);
+  assert.match(stopped.environment.build.releaseId, /^[a-f0-9]{64}$/);
+  assert.equal(stopped.milestones['runtime-inference-complete'].metrics.gpuWeightUploaded, 10496000);
+  assert.equal(exported.schemaVersion, 3);
+  // A repeated experiment must not silently cross a deployment boundary.
+  await page.evaluate(() => {
+    const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+    state.continue = { kind: 'load', remaining: 2, mode: 'asyncify', stagingMiB: 4, releaseId: '0'.repeat(64) };
+    sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+  });
+  await page.goto(`${origin}/web/sllm/experiments/index.html?next=1`);
+  await page.locator('#status').getByText('실험 실패 · 진단 JSON을 저장해 주세요.').waitFor();
+  assert.match(await page.locator('#last').innerText(), /반복 실행 중 빌드가 변경/);
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).active), null);
   results.push({ id: 'diagnostic-ui', success: true, tabIsolation: true, recoveryVerified: true, stopExportVerified: true });
 } finally {
   await mkdir(path.join(root, 'test-results'), { recursive: true });

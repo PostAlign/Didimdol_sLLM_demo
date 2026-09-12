@@ -71,7 +71,11 @@ export class OpfsWeightStore {
       throw new Error(`블록 검증 정보가 없는 가중치: ${file.location}`);
     }
     abort(signal);
-    if (await this.complete(file)) { this.metrics.cacheHits++; progress(file.bytes, 'cache'); return; }
+    if (await this.complete(file)) {
+      this.metrics.cacheHits++; progress(file.bytes, 'cache');
+      await checkpoint({ stage: 'weight-ready', location: file.location, length: file.bytes, source: 'opfs-cache', storage: { ...this.metrics } });
+      return;
+    }
     // Never accept a partial file left by a terminated worker as a cache hit.
     await this.folder.removeEntry(`${file.location}.complete`).catch(() => {});
     await checkpoint({ stage: 'weight-download', location: file.location, length: file.bytes });
@@ -129,7 +133,8 @@ export class OpfsWeightStore {
     } finally { marker.close(); }
     if (migrated) { this.metrics.migratedFiles++; await cache.delete(url).catch(() => {}); }
     else this.metrics.downloadedFiles++;
-    await checkpoint({ stage: 'weight-ready', location: file.location, length: file.bytes });
+    await checkpoint({ stage: 'weight-ready', location: file.location, length: file.bytes,
+      source: migrated ? 'legacy-cache' : 'network', storage: { ...this.metrics } });
   }
   descriptor(file) {
     return { ortRangeSource: 2, size: file.bytes,

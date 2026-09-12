@@ -31,6 +31,86 @@ WebKit/WASM compilation and the tokenizer are not included in this counter.
 
 ## Diagnostics and stop behavior
 
+### 2026-09-12: release identity and interruption evidence
+
+The landing pages now bootstrap `web/vendor/releases/<releaseId>/`. That immutable
+snapshot contains application modules, workers, local model/tokenizer metadata and
+ORT JS/factory/WASM/transformers. Relative worker imports and local data reads stay
+inside the snapshot. `web/vendor/build.json` is published last and points at the
+verified snapshot; the nested manifest must describe the same release. Both the
+browser and the verification tool check the manifest identity. Individual asset
+bytes are verified by the Node tool, not by downloading an extra WASM copy on the phone.
+
+`npm run release` packages current application files with the available native
+binaries, including after a CI cache hit. Run it after application changes before
+browser testing or serving the site. `npm run build` also packages a release after
+bundling ORT. New native builds record the ORT commit, actual Emscripten compiler
+version and build command; old cached binaries without this record have unknown
+native provenance (`nativeBuild: null` when rebundled), not an inferred build history.
+The application commit, dirty-worktree flag, asset hashes and release ID identify
+local builds as well as committed deployments.
+
+```bash
+npm run release
+npm run verify:release
+# Verify an assembled directory or the actual served bytes (supports Pages subpaths):
+npm run verify:release -- _site
+npm run verify:release -- https://HOST/REPOSITORY/
+```
+
+CI verifies the local snapshot, assembled site and deployed URLs. Old open pages
+continue to reference their original release; retaining that release on the host
+is necessary for later lazy imports/reads to succeed. A missing old release fails
+instead of loading files from a new one. The snapshot duplicates about 40 MiB of
+local application/tokenizer data on disk; it does not preload those files into RAM.
+
+New runs use diagnostic schema 3; schema 2 records remain readable. In addition
+to the latest 64 events, runs retain preparation/session milestones, the final
+preparation state of up to 64 files, and up to 2,048 allocation-order entries
+(with a truncation counter). Original `firstFault`, the priority `fault` (device
+loss takes precedence), error type/operation and last stage survive cleanup.
+Recovery is stored under `recovery:<UUID>` and merged on export. It records
+`interrupted`/`unknown` without rewriting the worker's original status/last/fault.
+
+Every range checkpoint includes the GPU allocation ledger. `gpuWeightAllocated`
+counts destination buffer sizes; `gpuWeightUploaded` counts bytes whose queue wait
+completed without observed device loss. The latter does not measure physical
+residency or prove error scopes were clean; `initializer-complete` follows their
+validation. `gpuWeightBufferCount` counts weight buffers, while the GPU ledger
+also counts other live buffers and their requested bytes. `gpuWriteMs` measures
+the synchronous write call and `gpuWaitMs` measures only the queue wait. IndexedDB
+time is excluded and reported separately under `persistence` (completed writes
+before the current snapshot). These counters still exclude process RSS, compiler
+and driver memory.
+
+The experiment controls offer 2/4/8 MiB staging, inspector attachment status, and
+one or three full loads. Five cached loads remain a separate experiment. Each
+repeat preserves its device/settings/release ID and stops if the release changes.
+Unexpected restarts stop repeats. Smaller staging changes transfer/scratch size,
+not the approximately 1,023 MiB weight residency. The small-runtime probe records
+requested and elapsed idle time; `idleAcceptanceCompleted` is true only after the
+full 120-second observation. A short smoke run is not idle acceptance.
+
+```bash
+npm test
+npm run test:browser
+ORT_MODES=asyncify TEST_IDLE_SECONDS=120 npm run test:browser
+ORT_MODES=asyncify TEST_APP_LOAD=1 TEST_FULL_MODEL=1 npm run test:browser
+```
+
+Use the same release on the phone for resident-only, small-runtime and full-model
+comparisons. Record exact OS/browser versions and whether an inspector is attached.
+Compare `persistence` times and session durations across repeated runs to quantify
+diagnostic overhead; timing counters alone cannot establish a memory cause.
+Only handset testing and system crash/Jetsam evidence can establish whether the
+reported restart is fixed. Weight swapping and compiler/runtime changes remain
+conditional follow-ups after the experiments distinguish their causes.
+
+Reviewed local results and exact release IDs are in [diagnostics-validation.json](diagnostics-validation.json).
+The synthetic 756-checkpoint IndexedDB comparison measured 625–663 ms before and
+840–880 ms after this change (two samples each); final snapshot sizes were 27,702
+and 59,534 bytes. This additional diagnostic cost must be checked on the phone.
+
 Each load and evaluation has its own UUID. The active marker/history live in sessionStorage
 so another tab cannot supply the previous attempt. IndexedDB `didimdol-runtime-diagnostics/runs`
 stores `run:<UUID>` records with environment/build identity, a bounded 64-event history,

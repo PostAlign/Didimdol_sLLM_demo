@@ -63,7 +63,7 @@ def inspect(path, revision=None):
                 expectedGpuResidentBytes=sum((row["bytes"] + 15) // 16 * 16 for row in external_rows),
                 # Actual CPU placement, driver memory and allocator overhead require runtime instrumentation.
                 expectedCpuStagingBytes={str(n): {"scratch": n * 2**20, "streamChunkUpperBound": n * 2**20}
-                                         for n in (8, 16, 32, 64)},
+                                         for n in (2, 4, 8, 16, 32, 64)},
                 files=file_rows, initializers=rows)
 
 

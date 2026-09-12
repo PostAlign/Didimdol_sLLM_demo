@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { mkdir, cp, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { git, packageRelease } from './release.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const ortRoot = path.resolve(process.env.ORT_SOURCE || path.join(root, '.work/onnxruntime'));
@@ -56,15 +57,18 @@ await cp(path.join(ortRoot, 'LICENSE'), path.join(output, 'LICENSE-onnxruntime')
 await cp(path.join(ortRoot, 'ThirdPartyNotices.txt'), path.join(output, 'ThirdPartyNotices-onnxruntime.txt'));
 await cp(path.join(root, 'node_modules/@huggingface/transformers/LICENSE'), path.join(output, 'LICENSE-transformers'));
 const sha = data => createHash('sha256').update(data).digest('hex');
+let nativeBuild = null;
+try { nativeBuild = JSON.parse(await readFile(path.join(artifacts, 'didimdol-build.json'), 'utf8')); } catch {}
 let builds = {};
 try { builds = JSON.parse(await readFile(path.join(output, 'build.json'), 'utf8')).builds || {}; } catch {}
-builds[mode] = { profile, threads, sourceArtifact,
+builds[mode] = { profile, threads, sourceArtifact, ortCommit: git(ortRoot, 'rev-parse', 'HEAD'), nativeBuild,
   wasmBytes: (await readFile(path.join(output, `${artifact}.wasm`))).byteLength,
   wasmSha256: sha(await readFile(path.join(output, `${artifact}.wasm`))),
   patchSha256: sha(await readFile(path.join(root, 'patches/ort-session-range-loader.patch'))),
   operatorsSha256: profile === 'mobile' ? sha(await readFile(path.join(root, 'model/required-operators.config'))) : null };
-await writeFile(path.join(output, 'build.json'), JSON.stringify({
+const runtimeBuild = {
   ortVersion: '1.26.0-dev.20260416-b7804b056c', transformersVersion: '4.2.0', rangeLoaderVersion: 2,
   modes: Object.keys(builds), builds,
-}, null, 2));
+};
+await packageRelease(root, runtimeBuild);
 console.log(`Built browser runtime: ${mode} → web/vendor`);
