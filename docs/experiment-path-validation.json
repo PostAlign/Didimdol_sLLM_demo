@@ -1,0 +1,483 @@
+{
+  "validatedAt": "2026-09-12T07:05:39.081603+00:00",
+  "environment": "Linux / Playwright Chromium headless / SwiftShader; full model served from unchanged local copies with an 8 GiB test storage quota.",
+  "finalReleaseId": "b6456c7722464160f861631df41af0b3587d09309fbd02af47aa79673400ef49",
+  "unitTests": {
+    "command": "npm test",
+    "passed": 34,
+    "failed": 0
+  },
+  "fullValidation": {
+    "command": "ORT_MODES=asyncify TEST_IDLE_SECONDS=120 TEST_APP_LOAD=1 TEST_FULL_MODEL=1 npm run test:browser",
+    "releaseId": "4c338bcdf5061a758cb8306ccab635da94f64d0500dd4bb232bc1a1994e67ef6",
+    "results": [
+      {
+        "id": "smoke-asyncify",
+        "success": true,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 3,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 21.299999982118607,
+          "rangeReadPeakMs": 12.199999988079071,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 8388608,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "resident-asyncify",
+        "success": true,
+        "durationMs": 73.5,
+        "loadedInitializerCount": 2,
+        "gpuWeightAllocated": 10496000,
+        "gpuWriteReturnedBytes": 10496000,
+        "expectedBytes": 10496000,
+        "allBytesUsed": true,
+        "verification": "u32-fnv1a-64-lanes-v1",
+        "allocationOrder": "manifest",
+        "inputSource": "synthetic",
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "runtime-asyncify",
+        "success": true,
+        "durationMs": 122155.5,
+        "idleElapsedMs": 121150.40000000596,
+        "idleAcceptanceCompleted": true,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 4,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 25.900000005960464,
+          "rangeReadPeakMs": 12.900000005960464,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 4194304,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "resident-opfs-asyncify",
+        "success": true,
+        "durationMs": 372.60000002384186,
+        "loadedInitializerCount": 2,
+        "gpuWeightAllocated": 10496000,
+        "gpuWriteReturnedBytes": 10496000,
+        "expectedBytes": 10496000,
+        "allBytesUsed": true,
+        "verification": "u32-fnv1a-64-lanes-v1",
+        "allocationOrder": "manifest",
+        "inputSource": "opfs-cache",
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 4,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 16.30000001192093,
+          "rangeReadPeakMs": 6.699999988079071,
+          "activeLocation": null
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "app-from-pretrained",
+        "success": true,
+        "durationMs": 10234.59999999404,
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 9,
+          "verifiedBytes": 1072392704,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 699,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 1963.6999996900558,
+          "rangeReadPeakMs": 13.5,
+          "activeLocation": null
+        },
+        "timings": {
+          "graphPreparationMs": 40.79999998211861,
+          "weightPreparationMs": 18861.09999999404,
+          "modelLoadCallMs": 10232.800000011921
+        },
+        "outputs": [
+          {
+            "row": 3,
+            "promptLen": 35,
+            "durationMs": 14336.799999982119,
+            "tokens": [
+              238789,
+              236764
+            ]
+          },
+          {
+            "row": 95,
+            "promptLen": 266,
+            "durationMs": 31318.09999999404,
+            "tokens": [
+              238789,
+              236764
+            ]
+          }
+        ],
+        "cleanupVerified": true,
+        "metrics": {
+          "loadedInitializerCount": 251,
+          "gpuWeightAllocated": 1072392704,
+          "gpuQueueCompletedBytes": 1072392704,
+          "cpuStagingPeak": 2097152,
+          "wasmHeapPeak": 24248320,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "full-opfs-resident",
+        "success": true,
+        "durationMs": 9494.800000011921,
+        "loadedInitializerCount": 251,
+        "gpuWeightAllocated": 1072392704,
+        "gpuWriteReturnedBytes": 1072392704,
+        "expectedBytes": 1072392704,
+        "allBytesUsed": true,
+        "verification": "u32-fnv1a-64-lanes-v1",
+        "allocationOrder": "manifest",
+        "inputSource": "opfs-cache",
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 9,
+          "migratedFiles": 0,
+          "downloadedFiles": 0,
+          "verifiedBytes": 0,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 699,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 2082.5000000596046,
+          "rangeReadPeakMs": 15.5,
+          "activeLocation": null
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "Gemma-FP32-8MiB",
+        "success": true,
+        "storage": {
+          "totalFiles": 9,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 9,
+          "verifiedBytes": 1072392704,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 315,
+          "rangeReadBytes": 1072392704,
+          "rangeReadMs": 2736.2999998033047,
+          "rangeReadPeakMs": 59.400000005960464,
+          "activeLocation": null
+        },
+        "decode": [
+          {
+            "step": 0,
+            "token": 1106,
+            "ms": 5216.200000017881
+          },
+          {
+            "step": 1,
+            "token": 4940,
+            "ms": 3178.2000000178814
+          }
+        ],
+        "metrics": {
+          "loadedInitializerCount": 251,
+          "gpuWeightAllocated": 1072392704,
+          "gpuQueueCompletedBytes": 1072392704,
+          "cpuStagingPeak": 8388608,
+          "wasmHeapPeak": 24248320,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "gpu-tracking-browser",
+        "success": true
+      },
+      {
+        "id": "diagnostic-ui",
+        "success": true,
+        "stopExportVerified": true
+      }
+    ]
+  },
+  "finalValidation": {
+    "command": "ORT_MODES=asyncify npm run test:browser",
+    "releaseId": "b6456c7722464160f861631df41af0b3587d09309fbd02af47aa79673400ef49",
+    "results": [
+      {
+        "id": "smoke-asyncify",
+        "success": true
+      },
+      {
+        "id": "resident-asyncify",
+        "success": true,
+        "verification": "u32-fnv1a-64-lanes-v1"
+      },
+      {
+        "id": "runtime-asyncify",
+        "success": true
+      },
+      {
+        "id": "resident-opfs-asyncify",
+        "success": true,
+        "verification": "u32-fnv1a-64-lanes-v1"
+      },
+      {
+        "id": "gpu-tracking-browser",
+        "success": true
+      },
+      {
+        "id": "resident-corruption",
+        "success": true,
+        "corruptedUploadRejected": true
+      },
+      {
+        "id": "diagnostic-ui",
+        "success": true,
+        "stopExportVerified": true
+      }
+    ]
+  },
+  "releaseVerification": {
+    "command": "npm run verify:release",
+    "verifiedAssets": 63
+  },
+  "assetsChangedAfterFullValidation": [
+    "web/sllm/diagnostics.js",
+    "web/sllm/experiments/device-runner.js"
+  ],
+  "scopeNote": "After full-size/120-second validation, only experiment export normalization and diagnostic summary timing precedence changed. Unit tests and the final Asyncify browser run cover these refinements. All runtime modes passed before the timing-summary refinement. The app worker, runtime binaries, range loader, OPFS store and resident probe hashes are identical across all tested releases.",
+  "pendingHandsetValidation": [
+    "Same release/browser full load at 8 MiB; compare 4/2 MiB if it interrupts.",
+    "Five cached loads and two 100-row evaluations.",
+    "Device crash logs for unexplained restarts; this local validation does not establish an iPhone crash fix."
+  ],
+  "allModesValidation": {
+    "command": "npm run test:browser",
+    "releaseId": "1785a895b234eaef55748aa7913d3670f9ef089cbb6856cb39c7511250350640",
+    "results": [
+      {
+        "id": "smoke-asyncify",
+        "success": true,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 3,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 15.699999988079071,
+          "rangeReadPeakMs": 9.400000005960464,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 8388608,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "resident-asyncify",
+        "success": true,
+        "durationMs": 70.30000001192093,
+        "loadedInitializerCount": 2,
+        "gpuWeightAllocated": 10496000,
+        "gpuWriteReturnedBytes": 10496000,
+        "expectedBytes": 10496000,
+        "allBytesUsed": true,
+        "verification": "u32-fnv1a-64-lanes-v1",
+        "allocationOrder": "manifest",
+        "inputSource": "synthetic",
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "runtime-asyncify",
+        "success": true,
+        "durationMs": 1015.1999999880791,
+        "idleElapsedMs": 0,
+        "idleAcceptanceCompleted": false,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 4,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 13.799999952316284,
+          "rangeReadPeakMs": 4.9000000059604645,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 4194304,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "resident-opfs-asyncify",
+        "success": true,
+        "durationMs": 309.30000001192093,
+        "loadedInitializerCount": 2,
+        "gpuWeightAllocated": 10496000,
+        "gpuWriteReturnedBytes": 10496000,
+        "expectedBytes": 10496000,
+        "allBytesUsed": true,
+        "verification": "u32-fnv1a-64-lanes-v1",
+        "allocationOrder": "manifest",
+        "inputSource": "opfs-cache",
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 4,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 15.5,
+          "rangeReadPeakMs": 7.5999999940395355,
+          "activeLocation": null
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "smoke-jspi",
+        "success": true,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 3,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 14.5,
+          "rangeReadPeakMs": 8.700000017881393,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 8388608,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "runtime-jspi",
+        "success": true,
+        "durationMs": 878.5999999940395,
+        "idleElapsedMs": 0,
+        "idleAcceptanceCompleted": false,
+        "storage": {
+          "totalFiles": 1,
+          "cacheHits": 0,
+          "migratedFiles": 0,
+          "downloadedFiles": 1,
+          "verifiedBytes": 10496013,
+          "openHandles": 0,
+          "peakOpenHandles": 1,
+          "rangeReadCount": 4,
+          "rangeReadBytes": 10496000,
+          "rangeReadMs": 13.999999970197678,
+          "rangeReadPeakMs": 4.899999976158142,
+          "activeLocation": null
+        },
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "gpuWeightAllocated": 10496000,
+          "gpuQueueCompletedBytes": 10496000,
+          "cpuStagingPeak": 4194304,
+          "wasmHeapPeak": 16777216,
+          "wasmTempPeak": 0
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "smoke-stock",
+        "success": true,
+        "metrics": {
+          "loadedInitializerCount": 2,
+          "cpuStagingPeak": 10485760,
+          "wasmHeapPeak": null
+        },
+        "gpuTracking": "complete"
+      },
+      {
+        "id": "gpu-tracking-browser",
+        "success": true
+      },
+      {
+        "id": "resident-corruption",
+        "success": true,
+        "corruptedUploadRejected": true
+      },
+      {
+        "id": "diagnostic-ui",
+        "success": true,
+        "stopExportVerified": true
+      }
+    ]
+  }
+}

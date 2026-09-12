@@ -62,8 +62,10 @@ try {
       assert.equal(result.metrics.gpuValidatedInitializerCount, 2);
       assert.equal(result.storage.peakOpenHandles, 1);
       assert.equal(result.storage.openHandles, 0);
-      for (const kind of (mode === 'asyncify' ? ['resident', 'runtime'] : ['runtime'])) {
+      for (const kind of (mode === 'asyncify' ? ['resident', 'runtime', 'resident-opfs'] : ['runtime'])) {
         const probePage = await browser.newPage();
+        const runtimeRequests = [];
+        probePage.on('request', request => { if (/\/web\/vendor\/ort[.-].*\.(mjs|wasm)/.test(request.url())) runtimeRequests.push(request.url()); });
         await probePage.goto(origin);
         const probe = await probePage.evaluate(async ({ origin, mode, kind, stagingMiB, idleSeconds }) => {
           const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
@@ -86,7 +88,20 @@ try {
           assert.equal(probe.metrics.cpuStagingPeak, 4 * 2**20, 'OPFS reads straight into the reusable scratch');
           assert.equal(probe.storage.downloadedFiles, 1, 'the diagnostic generates and verifies its own cold-cache fixture');
           assert.equal(probe.idleAcceptanceCompleted, Number(process.env.TEST_IDLE_SECONDS || 0) >= 120);
-        } else assert.equal(probe.gpuWeightAllocated, probe.expectedBytes);
+        } else {
+          assert.equal(probe.gpuWeightAllocated, probe.expectedBytes);
+          assert.equal(probe.environment.runtimeMode, null);
+          assert.equal(probe.environment.idleSeconds, 0);
+          assert.equal(probe.allBytesUsed, true);
+          assert.equal(probe.verification, 'u32-fnv1a-64-lanes-v1');
+          assert.equal(probe.gpuLedger.tracking.status, 'complete');
+          assert.deepEqual(runtimeRequests, [], 'resident comparisons must not import ORT binaries');
+          if (kind === 'resident-opfs') {
+            assert.equal(probe.storage.rangeReadBytes, probe.expectedBytes);
+            assert.equal(probe.storage.openHandles, 0);
+            assert.equal(probe.storage.peakOpenHandles, 1);
+          }
+        }
         await probePage.close();
       }
     }
@@ -156,6 +171,32 @@ try {
     assert.equal(result.metrics.loadedInitializerCount, 251);
     assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
     assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
+    assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
+    assert.ok(result.timings.modelLoadCallMs >= 0);
+    // Reuse the real model's verified files, in the same origin/context. This
+    // comparison must perform no model download and must not need an ORT session.
+    const resident = await page.evaluate(async () => {
+      const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
+      const worker = new Worker(asset('web/sllm/experiments/device-probes.js'), { type: 'module' });
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { worker.terminate(); reject(new Error('Full OPFS residency timed out')); }, 600000);
+        worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
+        worker.onmessage = ({ data }) => {
+          if (data.type === 'result') { clearTimeout(timer); worker.terminate(); resolve(data.result); }
+        };
+        worker.postMessage({ kind: 'resident-opfs', stagingMiB: 2 });
+      });
+    });
+    results.push({ id: 'full-opfs-resident', ...resident });
+    assert.equal(resident.success, true, resident.error);
+    assert.equal(resident.loadedInitializerCount, 251);
+    assert.equal(resident.storage.cacheHits, 9);
+    assert.equal(resident.storage.downloadedFiles, 0);
+    assert.equal(resident.storage.migratedFiles, 0);
+    assert.equal(resident.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
+    assert.equal(resident.storage.openHandles, 0);
+    assert.equal(resident.gpuLedger.tracking.status, 'complete');
+    console.log(JSON.stringify({ id: 'full-opfs-resident', success: resident.success, storage: resident.storage }));
     await page.close();
   }
   if (process.env.TEST_FULL_MODEL === '1') {
@@ -258,6 +299,26 @@ try {
   assert.equal(gpuTracking.faults.length, 1);
   assert.equal(gpuTracking.remaining, 0);
   results.push({ id: 'gpu-tracking-browser', success: true, lateBindingVerified: true, allocationErrorVerified: true });
+  const corruptedResidency = await page.evaluate(async () => {
+    const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
+    const { residentProbe } = await import(asset('web/sllm/experiments/device-probes.js'));
+    const { FIXTURE } = await import(asset('web/sllm/experiments/fixture.js'));
+    const original = GPUQueue.prototype.writeBuffer;
+    let corrupted = false;
+    GPUQueue.prototype.writeBuffer = function (buffer, offset, data, ...args) {
+      if (corrupted) return original.call(this, buffer, offset, data, ...args);
+      corrupted = true;
+      const words = new Uint32Array(data.buffer, data.byteOffset, data.byteLength / 4);
+      words[0] ^= 1;
+      try { return original.call(this, buffer, offset, data, ...args); }
+      finally { words[0] ^= 1; }
+    };
+    try { await residentProbe(FIXTURE.manifest, async () => {}, 2); return null; }
+    catch (error) { return error.message; }
+    finally { GPUQueue.prototype.writeBuffer = original; }
+  });
+  assert.match(corruptedResidency, /Resident buffer readback mismatch/);
+  results.push({ id: 'resident-corruption', success: true, corruptedUploadRejected: true });
   await page.evaluate(async origin => {
     const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
     await new Promise((resolve, reject) => {
@@ -348,7 +409,12 @@ try {
   await page.locator('#rows').getByText('중단 (원인 미확인)').waitFor();
   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).active), null);
   // Exercise the actual experiment controls, then stop during the intended idle period.
+  await page.locator('#kind').selectOption('resident');
+  assert.equal(await page.locator('#mode').isDisabled(), true);
+  assert.equal(await page.locator('#repeats').isDisabled(), true);
   await page.locator('#kind').selectOption('runtime');
+  assert.equal(await page.locator('#mode').isDisabled(), false);
+  assert.equal(await page.locator('#repeats').isDisabled(), true);
   await page.locator('#staging').selectOption('2');
   await page.locator('#inspector').selectOption('detached');
   await page.locator('#start').click();
@@ -363,6 +429,14 @@ try {
   assert.equal(exported.results.at(-1).comparison.trackingStatus, 'complete');
   assert.equal(exported.results.at(-1).comparison.gpuWeightAllocated, 10496000);
   assert.equal(exported.results.at(-1).comparison.storage.downloadedFiles, 1);
+  assert.equal(exported.results.at(-1).execution.idleAcceptanceCompleted, false);
+  assert.equal(exported.results.at(-1).execution.completedScope, null);
+  assert.equal(exported.results.at(-1).execution.idleRequestedSeconds, 120);
+  assert.equal(exported.series.at(-1).startedRuns, 1);
+  assert.equal(exported.series.at(-1).successfulRuns, 0);
+  assert.equal(exported.series.at(-1).requestedRuns, 1);
+  assert.equal(exported.repeats, undefined, 'screen preferences are not experiment evidence');
+  assert.ok(exported.screenSettings);
   assert.match(await page.locator('#rows').innerText(), /정상/);
   assert.equal(exported.runs.find(run => run.runId === exported.results.at(-1).runId).status, 'cancelled');
   const interrupted = exported.runs.find(run => run.runId === 'experiment-interrupted');
@@ -376,6 +450,19 @@ try {
   assert.match(stopped.environment.build.releaseId, /^[a-f0-9]{64}$/);
   assert.equal(stopped.milestones['runtime-inference-complete'].metrics.gpuWeightUploaded, 10496000);
   assert.equal(exported.schemaVersion, 3);
+  // The real OPFS comparison needs prepared model files; it must not fetch a
+  // gigabyte or treat a generated small fixture as the full model.
+  const modelRequests = [];
+  page.on('request', request => { if (request.url().includes('huggingface.co')) modelRequests.push(request.url()); });
+  await page.locator('#kind').selectOption('resident-opfs');
+  await page.locator('#start').click();
+  await page.locator('#status').getByText('실험 실패 · 진단 JSON을 저장해 주세요.').waitFor();
+  assert.match(await page.locator('#last').innerText(), /저장된 가중치가 없습니다/);
+  assert.deepEqual(modelRequests, []);
+  const missingCache = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+  assert.equal(missingCache.execution.runtimeMode, null);
+  assert.equal(missingCache.execution.idleRequestedSeconds, 0);
+  assert.equal(missingCache.requestedRuns, 1);
   // A repeated experiment must not silently cross a deployment boundary.
   await page.evaluate(() => {
     const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));

@@ -6,7 +6,7 @@ export const STAGING_MIB = [2, 4, 8, 16, 32, 64];
 /** Called inside OrtCreateSession by the patched EM_ASYNC_JS bridge. */
 export class SessionRangeLoader {
   constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal,
-    gpuLedger = () => null, gpuTracker = null, clock = () => performance.now() }) {
+    gpuLedger = () => null, gpuTracker = null, storage = () => null, clock = () => performance.now() }) {
     if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 2, 4, 8, 16, 32 or 64');
     this.stagingBytes = stagingMiB * 2 ** 20;
     this.checkpoint = checkpoint;
@@ -15,6 +15,7 @@ export class SessionRangeLoader {
     this.gpuTracker = gpuTracker;
     this.gpuLedger = gpuTracker ? () => gpuTracker.ledger : gpuLedger;
     this.clock = clock;
+    this.storage = storage;
     this.lossSaved = Promise.resolve();
     this.maxCpuTensorBytes = maxCpuTensorBytes;
     this.byRange = new Map(manifest.initializers.filter(t => t.location).map(t => [`${t.location}:${t.offset}:${t.bytes}`, t]));
@@ -40,7 +41,9 @@ export class SessionRangeLoader {
     this.emit({ stage, ...details, metrics: { ...this.metrics }, timestamp: Date.now() });
   }
   async record(stage, details = {}) {
-    await this.checkpoint({ ...this.last, ...details, stage, metrics: { ...this.metrics }, gpuLedger: this.gpuLedger() });
+    const storage = this.storage();
+    await this.checkpoint({ ...this.last, ...details, stage, metrics: this.sampleMetrics(), gpuLedger: this.gpuLedger(),
+      ...(storage ? { storage: { ...storage } } : {}) });
   }
   check() {
     this.signal?.throwIfAborted();

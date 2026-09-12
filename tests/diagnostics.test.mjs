@@ -88,6 +88,21 @@ test('failed persistence does not break later checkpoints, and queued records ar
   assert.equal(saved.status, 'failed');
 });
 
+test('storage progress survives interruption, while a finished session reports closed handles', () => {
+  const run = { status: 'running', last: { stage: 'gpu-wait', storage: { rangeReadBytes: 24, openHandles: 1 },
+    metrics: { gpuWeightAllocated: 40, wasmHeapBytes: 64 },
+    gpuLedger: { requestedCurrent: 56, tracking: { status: 'complete' } } },
+    milestones: { 'weights-prepared': { storage: { rangeReadBytes: 0, openHandles: 0 } } } };
+  assert.equal(diagnosticSummary(run).storage.rangeReadBytes, 24);
+  assert.equal(diagnosticSummary(run).gpuRequestedCurrent, 56);
+  assert.equal(diagnosticSummary(run).wasmHeapBytes, 64);
+  const finished = { ...run, status: 'ready', last: { stage: 'ready' }, records: [run.last],
+    summary: { storage: { rangeReadBytes: 40, openHandles: 0 }, timings: { modelLoadCallMs: 10, tokenizerPreparationMs: 5 } } };
+  assert.equal(diagnosticSummary(finished).storage.openHandles, 0);
+  assert.equal(diagnosticSummary(finished, { timings: { modelLoadCallMs: 10 } }).timings.tokenizerPreparationMs, 5);
+  assert.equal(diagnosticSummary({ ...run, last: { ...run.last, gpuLedger: { requestedCurrent: 0 } } }).gpuRequestedCurrent, null);
+});
+
 test('run journals serialize persistence, isolate IDs and retain a GPU fault after cleanup', async () => {
   const saved = new Map();
   let pending = false;

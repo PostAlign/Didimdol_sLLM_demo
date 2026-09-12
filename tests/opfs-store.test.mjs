@@ -53,7 +53,12 @@ test('OPFS verifies blocks, handles short I/O and reuses completed files without
   await f.store.descriptor(f.file).readRangeInto(7, 17, dst);
   assert.deepEqual(dst, f.bytes.subarray(7, 24));
   assert.equal(f.store.metrics.cacheHits, 1);
+  assert.equal(f.store.metrics.rangeReadBytes, 17);
+  assert.equal(f.store.metrics.rangeReadCount, 1);
+  assert.equal(f.store.metrics.activeLocation, 'weights');
+  assert.ok(f.store.metrics.rangeReadMs >= 0);
   f.store.close();
+  assert.equal(f.store.metrics.activeLocation, null);
   assert.equal(f.directory.live, 0);
   await assert.rejects(f.store.readRangeInto(f.file, 0, 1, new Uint8Array(1)), /after session/);
 });
@@ -80,6 +85,8 @@ test('source switches retain only one read handle, and cancellation leaves files
   for (const file of [f.file, second, f.file]) await f.store.descriptor(file).readRangeInto(0, 4, new Uint8Array(4));
   assert.equal(f.directory.live, 1);
   assert.equal(f.directory.peak, 1);
+  assert.equal(f.store.metrics.rangeReadCount, 3);
+  assert.equal(f.store.metrics.rangeReadBytes, 12);
   f.store.close();
   const g = fixture(); const controller = new AbortController();
   await assert.rejects(g.store.prepare(g.file, { signal: controller.signal,

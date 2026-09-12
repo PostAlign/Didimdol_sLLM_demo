@@ -92,6 +92,8 @@ test('range descriptors preserve bytes and checkpoint GPU writes with current al
   const f = fixture();
   const records = [];
   f.loader.checkpoint = async record => { records.push(structuredClone(record)); };
+  let readBytes = 0;
+  f.loader.storage = () => ({ rangeReadBytes: readBytes });
   // Remove the fixture's separate checkpoint flag; this test inspects the actual sequence.
   f.request.gpu.device.queue.writeBuffer = (buffer, offset, data, dataOffset, length) => {
     assert.equal(records.at(-1).stage, 'gpu-write');
@@ -103,11 +105,15 @@ test('range descriptors preserve bytes and checkpoint GPU writes with current al
     async readRangeInto(offset, length, destination) {
       assert.equal(records.at(-1).stage, 'range-read');
       destination.set(f.bytes.subarray(offset, offset + length));
+      readBytes += length;
     } };
   await f.loader.load({ ...f.request, file: descriptor });
   assert.deepEqual(f.uploaded, f.bytes.subarray(13));
   assert.equal(records.at(-1).stage, 'initializer-complete');
   assert.equal(f.loader.metrics.cpuStagingPeak, 8 * 2**20);
+  assert.equal(records.find(r => r.stage === 'gpu-write').storage.rangeReadBytes, 8 * 2**20);
+  assert.equal(records.at(-1).storage.rangeReadBytes, 10 * 2**20);
+  assert.equal(records.find(r => r.stage === 'upload-initializer').metrics.wasmHeapBytes, 65536);
 });
 
 test('device-lost is emitted only after durable persistence finishes', async () => {

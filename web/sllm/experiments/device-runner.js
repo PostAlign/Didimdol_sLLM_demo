@@ -1,5 +1,6 @@
 import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
+import { isResident, isSimpleProbe, executionSettings, executionEvidence, scopeLabel, seriesSummary } from './results.js';
 
 const $ = id => document.getElementById(id);
 const key = 'didimdol.device-experiments.v2';
@@ -12,17 +13,33 @@ $('device').value = state.device; $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
 $('inspector').value = state.inspector || 'unknown';
 $('repeats').value = String(state.repeats || 1);
+$('kind').value = state.kind || 'resident';
+function updateControls() {
+  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind']) $(id).disabled = !!state.active;
+  if (!state.active) {
+    $('mode').disabled = isResident($('kind').value);
+    $('repeats').disabled = $('kind').value !== 'load';
+  }
+}
+$('kind').addEventListener('change', updateControls);
 function render() {
+  const series = seriesSummary(state.results, state.active);
   $('rows').replaceChildren(...state.results.map(result => {
     const tr = document.createElement('tr');
     const comparison = result.comparison || {}, storage = comparison.storage;
+    const execution = result.execution || executionEvidence(result);
+    const group = series.find(group => group.seriesId === (result.seriesId || result.runIds?.[0] || result.runId));
     const mib = value => value == null ? '—' : (value / 2**20).toFixed(2);
     const cache = storage ? `${storage.cacheHits}/${storage.totalFiles} · 이전 ${storage.migratedFiles} · 다운로드 ${storage.downloadedFiles}` : '—';
     const location = [comparison.faultStage || comparison.stage, comparison.initializerName,
       comparison.destinationOffset == null ? null : `${mib(comparison.destinationOffset)} MiB 위치`].filter(Boolean).join(' · ') || '—';
-    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB · ${result.mode || '—'}`,
-      result.interrupted ? '중단 (원인 미확인)' : result.success ? '성공' : result.cancelled ? '사용자 중단' : '실패',
-      result.reportedDevice || '미기록', (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
+    const idle = execution.idleRequestedSeconds === 0 ? '대기 없음'
+      : `${execution.idleElapsedMs == null ? '미기록' : (execution.idleElapsedMs / 1000).toFixed(1)} / ${execution.idleRequestedSeconds ?? '?'}초`;
+    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB · ${isResident(result.kind) ? 'ORT 사용 안 함' : execution.runtimeMode || '미기록'}`,
+      result.interrupted ? '중단 (원인 미확인)' : result.success ? scopeLabel(execution.completedScope) : result.cancelled ? '사용자 중단' : '실패',
+      `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
+      `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
+      (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
       `${comparison.loadedInitializerCount ?? '—'} / ${comparison.expectedInitializerCount ?? '?'}`,
       mib(comparison.gpuWeightAllocated), `${mib(comparison.gpuWriteReturnedBytes)} / ${mib(comparison.gpuQueueCompletedBytes)}`,
       location, trackingLabel(comparison.trackingStatus),
@@ -40,18 +57,20 @@ if (state.active) {
   const storage = diagnostic?.summary?.storage;
   const success = !diagnostic?.fault && ((kind === 'load' && diagnostic?.status === 'ready') ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && storage?.totalFiles > 0 && storage.cacheHits === storage.totalFiles) ||
-    (['resident', 'runtime', 'probe'].includes(kind) && diagnostic?.status === 'complete') ||
+    ((isSimpleProbe(kind) || kind === 'probe') && diagnostic?.status === 'complete') ||
     (kind === 'evaluation' && state.active.evaluations?.length === 2 && state.active.evaluations.every(value => value.failed === 0)));
   const cancelled = diagnostic?.status === 'cancelled';
   const knownFailure = ['failed', 'device-lost'].includes(diagnostic?.status) || !!diagnostic?.fault ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && !success);
   state.results.push({ ...state.active, success, cancelled, interrupted: !success && !cancelled && !knownFailure,
+    execution: executionEvidence({ ...state.active, success }, diagnostic),
     comparison: diagnosticSummary(diagnostic && { ...diagnostic, recovery }, state.active.sessionResult) });
   $('last').textContent = JSON.stringify(diagnostic, null, 2);
   $('status').textContent = success ? '이전 실험 완료 기록을 복구했습니다.' : '이전 실험 기록을 복구했습니다. 진단 JSON을 저장해 주세요.';
   state.active = null; state.continue = null; save();
 }
 render();
+updateControls();
 for (const eventName of ['pagehide', 'pageshow', 'visibilitychange']) {
   addEventListener(eventName, event => {
     if (!state.active) return;
@@ -68,7 +87,7 @@ function reloadFor(config) {
 async function closeWorker(active, result) {
   if (!worker) return;
   const current = worker;
-  if (result.success && !['resident', 'runtime'].includes(active.kind)) {
+  if (result.success && !isSimpleProbe(active.kind)) {
     const cleanup = await new Promise(resolve => {
       const listener = ({ data }) => {
         if (data.type !== 'disposed') return;
@@ -89,20 +108,27 @@ async function finish(result) {
   const diagnostic = await readRun(active.runId);
   if (diagnostic?.fault && !result.cancelled) { result.success = false; result.error ||= diagnostic.fault.message || diagnostic.fault.stage; }
   state.results.push({ ...active, ...result, releaseId: diagnostic?.environment?.build?.releaseId || active.releaseId,
+    execution: executionEvidence({ ...active, ...result }, diagnostic),
     durationMs: Date.now() - active.startedAt, sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
   if (state.results.length > 30) state.results.shift();
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;
-  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind']) $(id).disabled = false;
-  $('status').textContent = result.success ? '실험 완료' : result.cancelled ? '사용자가 중단했습니다.' : '실험 실패 · 진단 JSON을 저장해 주세요.';
+  updateControls();
+  $('status').textContent = result.success ? scopeLabel(state.results.at(-1).execution.completedScope) : result.cancelled ? '사용자가 중단했습니다.' : '실험 실패 · 진단 JSON을 저장해 주세요.';
   $('last').textContent = JSON.stringify({ ...state.results.at(-1), diagnostic }, null, 2);
   if (result.success && active.remaining > 1) reloadFor({ kind: active.kind, remaining: active.remaining - 1,
+    seriesId: active.seriesId, requestedRuns: active.requestedRuns, attemptNumber: active.attemptNumber + 1,
     mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
     reportedDevice: active.reportedDevice, releaseId: active.releaseId });
 }
 async function begin(config) {
   if (state.active) return;
   config = { mode: state.mode, stagingMiB: 8, inspector: 'unknown', reportedDevice: state.device, ...config };
+  config.seriesId ||= newRunId();
+  config.requestedRuns ??= config.remaining || 1;
+  config.attemptNumber ??= 1;
+  if (isResident(config.kind)) config.mode = null;
+  state.kind = config.kind; $('kind').value = config.kind;
   const runId = newRunId();
   state.active = { ...config, runId, runIds: [runId], startedAt: Date.now() }; save();
   // A stop becomes available after the initial journal write and worker creation,
@@ -124,13 +150,14 @@ async function begin(config) {
   if (!state.active) return;
   state.active.releaseId = release.build.releaseId; save();
   const environment = { reportedDevice: config.reportedDevice, userAgent: navigator.userAgent, experiment: config.kind,
-    inspector: config.inspector, stagingMiB: config.stagingMiB, runtimeMode: config.mode, idleSeconds: 120 };
+    inspector: config.inspector, stagingMiB: config.stagingMiB, ...executionSettings(config.kind, config),
+    seriesId: config.seriesId, requestedRuns: config.requestedRuns, attemptNumber: config.attemptNumber };
   await saveCheckpoint({ schemaVersion: 3, runId, status: 'running', environment: { ...environment, build: buildIdentity(release.build) },
     last: { stage: 'worker-start', timestamp: Date.now() } }, runKey(runId));
   if (!state.active) return;
-  const simple = ['resident', 'runtime'].includes(config.kind);
+  const simple = isSimpleProbe(config.kind);
   const url = new URL(simple ? './device-probes.js' : '../worker.js', import.meta.url);
-  url.searchParams.set('ortMode', config.mode);
+  if (config.mode) url.searchParams.set('ortMode', config.mode);
   worker = new Worker(url, { type: 'module' });
   worker.onerror = async event => {
     const run = await readRun(state.active?.runId);
@@ -178,6 +205,7 @@ $('start').onclick = () => {
   state.device = $('device').value; state.mode = $('mode').value;
   state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   const kind = $('kind').value;
+  state.kind = kind;
   reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : kind === 'load' ? state.repeats : 1,
     mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, reportedDevice: state.device });
 };
@@ -193,7 +221,12 @@ $('export').onclick = async () => {
   const ids = new Set(state.results.flatMap(result => result.runIds || [result.runId]));
   for (const id of state.active?.runIds || []) ids.add(id);
   const runs = await Promise.all([...ids].map(readRun));
-  const blob = new Blob([JSON.stringify({ ...state, schemaVersion: 3, exportedAt: new Date().toISOString(), userAgent: navigator.userAgent,
+  const byId = new Map(runs.filter(Boolean).map(run => [run.runId, run]));
+  const results = state.results.map(result => ({ ...result,
+    execution: executionEvidence(result, byId.get(result.runId)) }));
+  const blob = new Blob([JSON.stringify({ schemaVersion: 3, exportedAt: new Date().toISOString(), userAgent: navigator.userAgent,
+    screenSettings: { device: state.device, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats },
+    active: state.active, results, series: seriesSummary(results, state.active),
     memoryNote: 'Logical allocation counters are not process RSS. Device logs are needed to confirm termination causes.',
     runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

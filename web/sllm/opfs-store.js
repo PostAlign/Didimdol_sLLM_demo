@@ -41,7 +41,8 @@ export class OpfsWeightStore {
     this.closed = false;
     this.verificationScratch = null;
     this.metrics = { totalFiles: manifest.files?.length || 0, cacheHits: 0, migratedFiles: 0, downloadedFiles: 0,
-      verifiedBytes: 0, openHandles: 0, peakOpenHandles: 0 };
+      verifiedBytes: 0, openHandles: 0, peakOpenHandles: 0,
+      rangeReadCount: 0, rangeReadBytes: 0, rangeReadMs: 0, rangeReadPeakMs: 0, activeLocation: null };
   }
   async openHandle(name) {
     const file = await this.folder.getFileHandle(safeName(name), { create: true });
@@ -145,16 +146,23 @@ export class OpfsWeightStore {
     if (this.closed) throw new Error('Weight read after session creation');
     checkedRange(offset, length, file.bytes);
     if (destination.byteLength !== length) throw new RangeError('Destination size mismatch');
+    const started = performance.now();
     if (this.active?.name !== file.location) {
       this.closeActive();
       const handle = await this.openHandle(file.location);
       this.active = { name: file.location, handle };
+      this.metrics.activeLocation = file.location;
       this.metrics.openHandles = 1;
       this.metrics.peakOpenHandles = 1;
       if (handle.getSize() !== file.bytes) throw new Error(`OPFS file size changed: ${file.location}`);
     }
     readFully(this.active.handle, destination, offset);
+    const elapsed = performance.now() - started;
+    this.metrics.rangeReadCount++;
+    this.metrics.rangeReadBytes += length;
+    this.metrics.rangeReadMs += elapsed;
+    this.metrics.rangeReadPeakMs = Math.max(this.metrics.rangeReadPeakMs, elapsed);
   }
-  closeActive() { this.active?.handle.close(); this.active = null; this.metrics.openHandles = 0; }
+  closeActive() { this.active?.handle.close(); this.active = null; this.metrics.openHandles = 0; this.metrics.activeLocation = null; }
   close() { this.closeActive(); this.verificationScratch = null; this.closed = true; }
 }

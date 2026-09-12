@@ -84,6 +84,9 @@ export function diagnosticSummary(run, sessionFallback = null) {
   // upgrade those to complete, or invent measurements for schema-2 exports.
   if (!ledger?.tracking && allocated > 0 && ledger && (ledger.bufferCount === 0 || ledger.requestedCurrent === 0)) trackingStatus = 'partial';
   const interrupted = run.status === 'running' && !!run.recovery;
+  const storage = last.storage ?? session?.storage
+    ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
+    ?? run.milestones?.['weights-prepared']?.storage ?? null;
   return { effectiveStatus: fault ? 'failed' : interrupted ? 'interrupted' : run.status,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
     destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
@@ -95,7 +98,11 @@ export function diagnosticSummary(run, sessionFallback = null) {
     gpuWriteReturnedBytes: metrics.gpuWriteReturnedBytes ?? progress.gpuWriteReturnedBytes ?? run.summary?.gpuWriteReturnedBytes ?? null,
     gpuQueueCompletedBytes: metrics.gpuQueueCompletedBytes ?? metrics.gpuWeightUploaded ?? progress.gpuWeightUploaded ?? run.summary?.gpuWeightUploaded ?? null,
     gpuValidatedInitializerCount: metrics.gpuValidatedInitializerCount ?? run.summary?.gpuValidatedInitializerCount ?? null,
-    trackingStatus, storage: run.milestones?.['weights-prepared']?.storage ?? session?.storage ?? null,
+    trackingStatus, storage,
+    gpuRequestedCurrent: trackingStatus === 'complete' ? ledger.requestedCurrent ?? null : null,
+    wasmHeapBytes: metrics.wasmHeapBytes ?? null,
+    timings: run.summary?.sessionMetrics?.timings ?? run.summary?.timings
+      ?? session?.timings ?? run.milestones?.['session-create']?.timings ?? null,
     releaseId: run.environment?.build?.releaseId ?? null };
 }
 

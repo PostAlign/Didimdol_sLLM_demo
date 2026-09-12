@@ -4,9 +4,10 @@ import { OpfsWeightStore } from '../opfs-store.js';
 import { installGpuTracking } from '../gpu-device.js';
 import { FIXTURE } from './fixture.js';
 import { loadOrt, runtimeRelease } from '../ort-runtime.js';
+import { executionSettings, isResident } from './results.js';
 
 /** Use every uploaded element while retaining all weight buffers until the end. No ORT import. */
-export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
+export async function residentProbe(manifest, checkpoint, stagingMiB = 8, store = null) {
   if (!STAGING_MIB.includes(stagingMiB)) throw new Error('Invalid staging size');
   const persist = checkpoint;
   let current = {}, tracked;
@@ -18,7 +19,7 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
   checkpoint = async record => {
     current = record;
     await tracked.flush();
-    await persist({ ...record, gpuLedger: tracked.ledger });
+    await persist({ ...record, gpuLedger: tracked.ledger, ...(store ? { storage: { ...store.metrics } } : {}) });
     if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
   };
   try {
@@ -43,20 +44,25 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
     let scopes = 2;
     try {
       await checkpoint({ stage: 'resident-start', expectedInitializerCount: manifest.initializers.filter(t => t.location).length,
-        expectedGpuResidentBytes: manifest.totalExternalTensorBytes });
+        expectedGpuResidentBytes: manifest.totalExternalTensorBytes, inputSource: store ? 'opfs-cache' : 'synthetic',
+        allocationOrder: 'manifest', verification: 'u32-fnv1a-64-lanes-v1' });
       const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { entryPoint: 'main', module: device.createShaderModule({ code: `
-        @group(0) @binding(0) var<storage, read> weights: array<f32>;
-        @group(0) @binding(1) var<storage, read_write> sums: array<f32>;
+        @group(0) @binding(0) var<storage, read> weights: array<u32>;
+        @group(0) @binding(1) var<storage, read_write> sums: array<u32>;
         @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-          var sum = 0.0;
-          for (var i = id.x; i < arrayLength(&weights); i += 64u) { sum += weights[i]; }
+          var sum = 2166136261u;
+          for (var i = id.x; i < arrayLength(&weights); i += 64u) { sum = (sum ^ weights[i]) * 16777619u; }
           sums[id.x] = sum;
         }` }) } });
       const output = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
       const readback = device.createBuffer({ size: 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       buffers.push(output, readback);
       const scratch = new Float32Array(stagingMiB * 2**20 / 4).fill(1);
+      const scratchBytes = new Uint8Array(scratch.buffer), words = new Uint32Array(scratch.buffer);
+      const expected = new Uint32Array(64);
+      const files = new Map(manifest.files?.map(file => [file.location, file]));
       for (const [index, init] of manifest.initializers.filter(t => t.location).entries()) {
+        expected.fill(2166136261);
         await checkpoint({ stage: 'resident-allocate', initializerName: init.name, length: init.bytes, gpuWeightAllocated: allocated,
           gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned, loadedInitializerCount: index, gpuWeightBufferCount: index });
         const buffer = device.createBuffer({ size: init.bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -65,8 +71,19 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
         for (let offset = 0; offset < init.bytes; offset += scratch.byteLength) {
           const chunkBytes = Math.min(scratch.byteLength, init.bytes - offset);
           const range = { initializerName: init.name, destinationOffset: offset, chunkBytes, gpuWeightAllocated: allocated,
+            location: init.location, fileOffset: init.offset + offset,
             gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned,
             gpuWeightBufferCount: index + 1, loadedInitializerCount: index };
+          if (store) {
+            await checkpoint({ stage: 'resident-read', ...range });
+            await store.readRangeInto(files.get(init.location), init.offset + offset, chunkBytes, scratchBytes.subarray(0, chunkBytes));
+          }
+          // Hash the same raw FP32 bits on CPU/GPU for both sources. No tolerance,
+          // sampled reads or full-file readback; every word contributes to a lane.
+          for (let i = 0; i < chunkBytes / 4; i++) {
+            const lane = (offset / 4 + i) % 64;
+            expected[lane] = Math.imul(expected[lane] ^ words[i], 16777619) >>> 0;
+          }
           await checkpoint({ stage: 'resident-write', ...range });
           const writeStart = performance.now();
           device.queue.writeBuffer(buffer, offset, scratch, 0, chunkBytes / 4);
@@ -94,9 +111,9 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
           gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned, loadedInitializerCount: index });
         device.queue.submit([encoder.finish()]);
         await readback.mapAsync(GPUMapMode.READ);
-        const sums = new Float32Array(readback.getMappedRange());
+        const sums = new Uint32Array(readback.getMappedRange());
         for (let lane = 0; lane < 64; lane++) {
-          if (sums[lane] !== Math.max(0, Math.ceil((init.bytes / 4 - lane) / 64))) throw new Error('Resident buffer readback mismatch');
+          if (sums[lane] !== expected[lane]) throw new Error(`Resident buffer readback mismatch: ${init.name}, lane ${lane}`);
         }
         readback.unmap();
         await checkpoint({ stage: 'resident-complete', initializerName: init.name, loadedInitializerCount: index + 1,
@@ -112,7 +129,9 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
       const count = manifest.initializers.filter(t => t.location).length;
       return { gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded, gpuWriteReturnedBytes: writeReturned,
         loadedInitializerCount: count, expectedInitializerCount: count, gpuValidatedInitializerCount: count,
-        gpuLedger: tracked.ledger, expectedBytes: manifest.totalExternalTensorBytes, allBytesUsed: true };
+        gpuLedger: tracked.ledger, expectedBytes: manifest.totalExternalTensorBytes, allBytesUsed: true,
+        inputSource: store ? 'opfs-cache' : 'synthetic', allocationOrder: 'manifest', verification: 'u32-fnv1a-64-lanes-v1',
+        cpuStagingBytes: scratch.byteLength + expected.byteLength };
     } finally {
       while (scopes) { scopes--; await device.popErrorScope(); }
       await lossSaved; closed = true;
@@ -120,6 +139,40 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8) {
       device.destroy();
     }
   } finally { await tracked.flush(); tracked.restore(); }
+}
+
+async function prepareFixture(store, checkpoint) {
+  for (const file of FIXTURE.manifest.files) {
+    await store.prepare(file, { checkpoint, openResponse: async () => {
+      const bytes = new Uint8Array(file.bytes);
+      bytes.set(new TextEncoder().encode('external-test'));
+      for (const init of FIXTURE.manifest.initializers.filter(t => t.location === file.location)) {
+        const values = new Float32Array(init.bytes / 4).fill(init.name === 'bias' ? 0.5 : 1);
+        bytes.set(new Uint8Array(values.buffer), init.offset);
+      }
+      return new Response(bytes);
+    } });
+  }
+}
+
+async function opfsResidentProbe(manifest, checkpoint, stagingMiB, fixture) {
+  const store = await OpfsWeightStore.open(manifest);
+  let result;
+  try {
+    if (fixture) await prepareFixture(store, checkpoint);
+    else {
+      // Match a warm production load. Never mix download/migration with this
+      // comparison or silently generate substitute weights for a real model.
+      for (const file of manifest.files) {
+        if (!await store.complete(file)) throw new Error(`저장된 가중치가 없습니다: ${file.location}. 전체 모델 로드에서 파일 준비를 먼저 완료해 주세요.`);
+        await store.prepare(file, { checkpoint, openResponse: () => { throw new Error('OPFS comparison requires verified cache'); } });
+      }
+    }
+    store.finishPreparation();
+    await checkpoint({ stage: 'weights-prepared', storage: { ...store.metrics } });
+    result = await residentProbe(manifest, checkpoint, stagingMiB, store);
+  } finally { store.close(); }
+  return { ...result, storage: { ...store.metrics } };
 }
 
 export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingMiB = 8) {
@@ -130,23 +183,13 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
   const store = await OpfsWeightStore.open(manifest);
   let tracked, loader, session;
   try {
-    for (const file of manifest.files) {
-      await store.prepare(file, { checkpoint, openResponse: async () => {
-        const bytes = new Uint8Array(file.bytes);
-        bytes.set(new TextEncoder().encode('external-test'));
-        for (const init of manifest.initializers.filter(t => t.location === file.location)) {
-          const values = new Float32Array(init.bytes / 4).fill(init.name === 'bias' ? 0.5 : 1);
-          bytes.set(new Uint8Array(values.buffer), init.offset);
-        }
-        return new Response(bytes);
-      } });
-    }
+    await prepareFixture(store, checkpoint);
     store.finishPreparation();
     await checkpoint({ stage: 'weights-prepared', storage: { ...store.metrics } });
     tracked = await installGpuTracking(manifest.largestInitializerBytes, record => {
       if (['gpu-error', 'gpu-uncaptured-error', 'device-lost'].includes(record.stage)) return checkpoint(record);
     }, { context: () => ({ initializerName: loader?.last?.initializerName }) });
-    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuTracker: tracked });
+    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuTracker: tracked, storage: () => store.metrics });
     globalThis.__ortExternalTensorLoader = loader;
     await checkpoint({ stage: 'runtime-create', expectedInitializerCount: manifest.initializers.filter(t => t.location).length });
     const graph = Uint8Array.from(atob(FIXTURE.graph), c => c.charCodeAt(0));
@@ -165,11 +208,12 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
       } finally { input.dispose(); outputs.Y.dispose(); }
     }
     if (loader.metrics.rangeReadCount !== reads) throw new Error('Weights read during inference');
-    await checkpoint({ stage: 'runtime-inference-complete', metrics: loader.sampleMetrics() });
+    await checkpoint({ stage: 'runtime-inference-complete', metrics: loader.sampleMetrics(), storage: { ...store.metrics } });
     await checkpoint({ stage: 'runtime-idle-start', idleSeconds });
     const idleStart = performance.now();
     for (let elapsed = 0; elapsed < idleSeconds; elapsed += 5) {
-      await checkpoint({ stage: 'runtime-idle', elapsedSeconds: elapsed, metrics: loader.sampleMetrics(), gpuLedger: { ...tracked.ledger } });
+      await checkpoint({ stage: 'runtime-idle', elapsedSeconds: elapsed, idleElapsedMs: performance.now() - idleStart,
+        metrics: loader.sampleMetrics(), gpuLedger: { ...tracked.ledger }, storage: { ...store.metrics } });
       await new Promise(resolve => setTimeout(resolve, Math.min(5, idleSeconds - elapsed) * 1000));
       if (loader.metrics.deviceLost) throw new Error('Device lost during idle');
     }
@@ -191,9 +235,10 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
 }
 
 self.onmessage = async ({ data }) => {
-  const stagingMiB = data.stagingMiB ?? 8, mode = data.mode || 'asyncify', idleSeconds = data.idleSeconds ?? 120;
+  const stagingMiB = data.stagingMiB ?? 8, mode = data.mode || 'asyncify';
+  const settings = executionSettings(data.kind, data), { idleSeconds } = settings;
   const journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
-    experiment: data.kind, runtimeMode: data.kind === 'resident' ? null : mode, stagingMiB, idleSeconds,
+    experiment: data.kind, ...settings, stagingMiB,
     fixture: !!data.fixture, workerURL: self.location.href });
   const checkpoint = async record => {
     await journal.checkpoint(record);
@@ -206,10 +251,18 @@ self.onmessage = async ({ data }) => {
     await checkpoint({ stage: 'probe-start' });
     if (!STAGING_MIB.includes(stagingMiB) || !Number.isInteger(idleSeconds) || idleSeconds < 0 || idleSeconds > 600) throw new Error('Invalid probe settings');
     let result;
-    if (data.kind === 'resident') {
+    if (isResident(data.kind)) {
       const manifest = data.fixture ? FIXTURE.manifest : await fetch(new URL('../../../model/initializers.json', import.meta.url)).then(r => r.json());
-      result = await residentProbe(manifest, checkpoint, stagingMiB);
-    } else result = await runtimeProbe(mode, checkpoint, idleSeconds, stagingMiB);
+      if (data.kind === 'resident') result = await residentProbe(manifest, checkpoint, stagingMiB);
+      else {
+        const execute = async lock => {
+          if (!lock) throw new Error('다른 탭에서 모델을 준비 중입니다. 해당 작업이 끝난 후 다시 시도해 주세요.');
+          return opfsResidentProbe(manifest, checkpoint, stagingMiB, !!data.fixture);
+        };
+        result = navigator.locks ? await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute) : await execute(true);
+      }
+    } else if (data.kind === 'runtime') result = await runtimeProbe(mode, checkpoint, idleSeconds, stagingMiB);
+    else throw new Error(`Unknown experiment: ${data.kind}`);
     result = { ...result, success: !journal.state.fault, durationMs: performance.now() - start,
       releaseId: build.releaseId, stagingMiB, environment: journal.state.environment };
     await journal.finish('complete', result);

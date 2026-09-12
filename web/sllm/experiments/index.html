@@ -7,6 +7,7 @@
 <label>기기·OS·브라우저 버전 <input id="device" placeholder="예: iPhone 14 Pro Max / iOS 26.4.2 / Chrome 버전"></label>
 <label>실험 <select id="kind">
 <option value="resident">1. GPU 가중치 상주만 확인 (약 1.07 GB)</option>
+<option value="resident-opfs">1b. 저장된 가중치 GPU 상주 확인</option>
 <option value="runtime">2. 작은 모델 실행 + 2분 대기</option>
 <option value="load">3. 전체 모델 로드</option>
 <option value="warm-load">4. 저장된 모델 로드 5회</option>
@@ -18,10 +19,11 @@
 <label>전체 모델 로드 반복 <select id="repeats"><option value="1">1회</option><option value="3">3회</option></select></label>
 <label>검사기 연결 <select id="inspector"><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
 <p>전송 크기는 임시 버퍼 크기를 바꿉니다. 전체 가중치의 GPU 상주량 약 1,023 MiB는 동일합니다. 작은 모델 실험은 실행 후 120초 동안 관찰합니다.</p>
+<p>상주 실험은 ORT를 사용하지 않으며 1회 실행합니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
 <p><button id="start">실험 시작</button><button id="stop" disabled>중단</button><button id="export">진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>
 <p>같은 기기·릴리스·런타임에서 전송 크기와 캐시 조건을 비교해 주세요. GPU 계측이 부분 관측이면 전체 할당 이력을 확인할 수 없습니다.</p>
-<div style="overflow-x:auto"><table style="min-width:1200px"><thead><tr><th>실험·설정</th><th>결과</th><th>기기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div style="overflow-x:auto"><table style="min-width:1400px"><thead><tr><th>실험·설정</th><th>검증 결과</th><th>실행 횟수</th><th>관찰 / 요청 시간</th><th>기기·검사기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table></div>
 <pre id="last"></pre>
 <p><a href="../../../index.html">평가 화면</a> · <a href="./baseline.html">이전 파일 크기 비교 실험</a></p>
 <script type="module" src="./bootstrap.js"></script></html>

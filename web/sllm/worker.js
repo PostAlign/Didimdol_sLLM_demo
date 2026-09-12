@@ -125,6 +125,7 @@ async function pruneStaleCache() {
 // A failed WebGPU session is not retried in a heap that may retain allocations.
 
 async function load({ device: preferred, stagingMiB = 8 }) {
+  const loadStarted = performance.now(), timings = {};
   if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
   env.useBrowserCache = true;   // 그래프(1 MB)·설정·토크나이저만 transformers.js 가 캐시한다. 가중치는 여기서.
   await pruneStaleCache();
@@ -161,11 +162,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     expectedInitializerCount: manifest.initializers.filter(t => t.location).length,
     expectedGpuResidentBytes: manifest.totalExternalTensorBytes });
   console.info('[MODEL] graph loaded', { bytes: verifiedGraph.byteLength, sha256: hash });
+  timings.graphPreparationMs = performance.now() - loadStarted;
   // Ensure from_pretrained consumes the verified graph via env.fetch rather
   // than bypassing it with a separately cached graph response.
   env.useBrowserCache = false;
 
+  const preparationStarted = performance.now();
   const externalData = await mountWeights(manifest);
+  timings.weightPreparationMs = performance.now() - preparationStarted;
   const tracked = trackedGpu = await installGpuTracking(manifest.largestInitializerBytes, record => {
     if (trace) console.info('[GPU]', record);
     if (['gpu-uncaptured-error', 'gpu-error', 'device-lost'].includes(record.stage)) return journal.checkpoint({
@@ -176,6 +180,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
   const loader = new SessionRangeLoader({
     manifest, stagingMiB, signal: loadController.signal,
     gpuTracker: tracked,
+    storage: () => weightStore.metrics,
     checkpoint: record => journal.checkpoint(record),
     emit: record => {
       if (trace) console.info(`[${record.stage.startsWith('gpu') ? 'GPU' : record.stage.startsWith('wasm') ? 'WASM' :
@@ -187,8 +192,9 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     },
   });
   globalThis.__ortExternalTensorLoader = loader;
-  await journal.checkpoint({ stage: 'session-create', runtimeMode, stagingMiB, storage: { ...weightStore.metrics } });
+  await journal.checkpoint({ stage: 'session-create', runtimeMode, stagingMiB, timings: { ...timings }, storage: { ...weightStore.metrics } });
   let success = false;
+  const modelCallStarted = performance.now();
   try {
     model = await AutoModelForCausalLM.from_pretrained(REPO, {
       revision: REVISION, subfolder: '', dtype: 'fp32', device: 'webgpu',
@@ -197,12 +203,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
         executionProviders: ['webgpu'],
         enableCpuMemArena: false, enableMemPattern: false },
     });
+    timings.modelLoadCallMs = performance.now() - modelCallStarted;
     await tracked.flush();
     if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     if (loader.metrics.loadedInitializerCount !== manifest.initializers.filter(t => t.location).length) throw new Error('Incomplete external initializer load');
     loadController.signal.throwIfAborted();
     success = true;
   } finally {
+    timings.modelLoadCallMs ??= performance.now() - modelCallStarted;
     await tracked.flush();
     if (!success) tracked.restore();
     await loader.lossSaved;
@@ -211,6 +219,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     const result = { stage: success ? 'session-create-complete' : 'session-create-failed',
       runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics,
       gpuLedger: { ...tracked.ledger }, storage: { ...weightStore.metrics }, lastInitializer: loader.last };
+    result.timings = { ...timings };
     sessionMetrics = result;
     await journal.checkpoint(result);
     post({ type: 'session-result', result });
@@ -219,6 +228,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     verifiedGraph = null;
   }
   env.useBrowserCache = true;
+  const tokenizerStarted = performance.now();
   await journal.checkpoint({ stage: 'tokenizer-load', metrics: loader.sampleMetrics(), gpuLedger: { ...tracked.ledger } });
   post({ type: 'phase', text: '토크나이저 내려받는 중…' });
   [tokenizer, chatTemplate, rows] = await Promise.all([
@@ -230,6 +240,9 @@ async function load({ device: preferred, stagingMiB = 8 }) {
       t.split('\n').filter(Boolean).map(JSON.parse)),
   ]);
   rouge1 = makeRouge1(tokenizer);
+  timings.tokenizerPreparationMs = performance.now() - tokenizerStarted;
+  timings.totalLoadMs = performance.now() - loadStarted;
+  sessionMetrics.timings = { ...timings };
 
   loadController.signal.throwIfAborted();
   await tracked.flush();

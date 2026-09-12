@@ -174,7 +174,8 @@ Open `web/sllm/experiments/` on the actual phone, enter the complete OS/browser 
 
 | Experiment | Purpose |
 | --- | --- |
-| GPU residency | No ORT import. Fill and read every float of buffers matching all external weights, keeping every buffer alive until completion. |
+| GPU residency | No ORT import. Fill buffers matching all external weights and checksum every word, keeping every buffer alive until completion. |
+| Stored-weight GPU residency | No ORT import. Read the verified OPFS model files and retain all weight buffers. Requires files already prepared by a full-load attempt. |
 | Small runtime | Execute the 10 MiB FP32 model twice, then wait 120 seconds to expose delayed compilation/resource growth. |
 | Full load | Actual app/from_pretrained path with verified OPFS weights. |
 | Five cached loads | Five fresh pages/workers reusing completed files. Run after the first full load. |
@@ -266,3 +267,61 @@ Phone validation order for this follow-up:
 5. Correlate any interruption with device crash/Jetsam logs. Smaller staging does
    not reduce the approximately 1,023 MiB FP32 weight residency. Default staging
    or model residency changes require those device results.
+
+### Experiment scope and OPFS comparison
+
+The experiment export keeps UI preferences under `screenSettings`. Each result
+has `execution` evidence and belongs to a `series` with requested, started and
+successful run counts. An evaluation's load/probe/evaluation UUIDs are not counted
+as repeated loading attempts. Older records remain readable; missing repeat
+counts or measured idle durations stay unknown. Resident probes have
+`runtimeMode: null` and zero requested idle time. The runtime and repeat selectors
+are disabled when they do not apply to the selected experiment. Runtime results
+report measured idle milliseconds; only a completed observation of at least
+120 seconds grants the full idle acceptance label.
+
+`resident-opfs` requires already verified production OPFS files. It never downloads,
+migrates, or substitutes model weights. A failed full load may have finished file
+preparation and therefore can still supply this comparison. Missing files produce
+an explicit error. This path uses the production store and the same origin lock,
+keeps one read handle open, and closes it on completion or failure. Fixture data
+creation is available only via the existing test worker's explicit `fixture` flag.
+
+Both resident modes now use `verification: u32-fnv1a-64-lanes-v1`: CPU and GPU
+compute matching integer checksums over every 32-bit word of the FP32 data. The
+GPU returns 256 bytes per initializer. This is a checksum comparison, not a
+cryptographic proof or a full-byte readback. Both modes retain all weight buffers,
+use the same scratch size, shader and manifest allocation order, and import no
+ORT runtime. CPU checksum work is present in both; it is additional work relative
+to production loading. The old resident probe used floating-point sums of ones,
+so its durations should not be compared directly with the new verification method.
+The manifest order also differs from ORT's observed allocation order. Neither a
+resident success nor logical buffer sizes prove physical residency, full-model
+inference success, or prolonged stability.
+
+Production range checkpoints now sample the current WASM heap capacity and the
+OPFS store's completed range-read count, bytes, total/peak read duration and active
+file/handle state. Read time includes acquiring a new file handle when needed,
+and excludes diagnostic persistence and file preparation/hash verification. A
+completed session reports closed handles; an interrupted upload retains its most
+recent storage snapshot. Full-load results also record graph preparation (including
+preceding cache cleanup), weight preparation, the `from_pretrained` call, tokenizer
+preparation and total load durations. These phase durations include awaited
+checkpoints; GPU/read operation timers and `persistence` remain separate. Complete
+GPU tracking permits reporting total requested GPU bytes alongside weight bytes;
+partial tracking does not fabricate a total. Process RSS and driver memory are
+still unmeasured.
+
+On the same phone/browser/release, compare synthetic residency, small-runtime
+inference with the full 120-second idle period, full loading at 8 MiB, and stored
+OPFS residency. If full loading still interrupts, compare 4/2 MiB using the same
+cache and inspector conditions. Complete five warm loads and two evaluations
+before claiming handset acceptance. Correlate unexplained restarts with device
+logs; this change does not establish an iPhone crash fix by itself.
+
+Local results and the exact tested release identities are recorded in
+[experiment-path-validation.json](experiment-path-validation.json). The full-size
+app and OPFS comparison, real-prompt FP32 outputs, and the 120-second runtime
+observation passed locally. The final export refinement was then checked with
+all runtime modes, including a corrupted-upload rejection and a missing-cache
+failure without a model network request. Phone validation remains outstanding.
