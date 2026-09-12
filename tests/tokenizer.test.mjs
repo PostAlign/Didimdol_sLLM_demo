@@ -108,7 +108,7 @@ test('build patch rejects changed source or dependency version', async () => {
 
 test('preparation awaits durable markers and retains file stages after model events evict recent records', async () => {
   let saved;
-  const run = new RunDiagnostics('tokenizer', { loadOrder: 'tokenizer-before-session' }, async value => {
+  const run = new RunDiagnostics('tokenizer', { loadOrder: 'tokenizer-before-session', diagnosticsMode: 'snapshot' }, async value => {
     await Promise.resolve(); saved = structuredClone(value); return true;
   });
   const requests = [];
@@ -141,7 +141,7 @@ test('HTTP, decode and JSON failures retain the actual file and failing operatio
     [() => new Response(new Uint8Array([255])), 'tokenizer-decode-start'],
     [() => new Response('{broken'), 'tokenizer-parse-start'],
   ]) {
-    const run = new RunDiagnostics('failed-tokenizer', {}, async () => true);
+    const run = new RunDiagnostics('failed-tokenizer', { diagnosticsMode: 'snapshot' }, async () => true);
     await assert.rejects(readPreparationFile({ file: 'tokenizer.json', url: 'https://example.com/tokenizer.json', json: true,
       fetchFile: response, checkpoint: run.checkpoint }));
     assert.equal(run.state.fault.file, 'tokenizer.json');
@@ -152,7 +152,7 @@ test('HTTP, decode and JSON failures retain the actual file and failing operatio
 });
 
 test('an interruption at parse-start stays cause unknown, and cancellation prevents construction', async () => {
-  const run = new RunDiagnostics('parse-interrupted', {}, async () => true);
+  const run = new RunDiagnostics('parse-interrupted', { diagnosticsMode: 'snapshot' }, async () => true);
   await run.checkpoint({ stage: 'tokenizer-parse-start', file: 'tokenizer.json' });
   const recovery = recoveryEvidence(run.state);
   const summary = diagnosticSummary({ ...run.state, recovery });

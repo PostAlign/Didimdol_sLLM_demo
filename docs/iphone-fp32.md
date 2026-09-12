@@ -4,6 +4,11 @@ Target: iPhone 14 Pro Max, iOS 26, Chrome for iOS. FP32 weights, model revision,
 100 evaluation rows, prompt template, sampling settings and the 512-token limit remain the same.
 This change has local browser tests; iPhone success must be established on the actual device.
 
+The next follow-up adds small-runtime plus full-weight residency, native session
+phase markers, incremental diagnostic storage and bounded cleanup. See
+[session-diagnostics.md](session-diagnostics.md) for its comparison protocol and
+the interpretation of the September 12 `02719f4a4081` phone logs.
+
 ## Compact BPE and full-session comparisons
 
 The September 12 phone exports from release `c418434115fb` (commit `53303eb`)

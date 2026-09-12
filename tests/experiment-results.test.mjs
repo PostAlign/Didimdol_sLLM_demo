@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat } from '../web/sllm/experiments/results.js';
 
+test('combined residency requires real WASM, retained small session, and the same device', () => {
+  const result = { kind: 'runtime-resident', success: true, mode: 'asyncify', allBytesUsed: true,
+    inferenceVerified: true, ortWasmInstantiated: true, smallSessionRetained: true, sameDevice: true, modelSessionCreated: false };
+  assert.equal(executionEvidence(result).completedScope, 'runtime-and-gpu-residency');
+  assert.equal(executionEvidence(result).runtimeMode, 'asyncify');
+  assert.equal(executionEvidence(result).idleRequestedSeconds, 0);
+  assert.equal(executionEvidence(result, { summary: result, cleanup: { success: false } }).completedScope, null);
+  for (const key of ['allBytesUsed', 'inferenceVerified', 'ortWasmInstantiated', 'smallSessionRetained', 'sameDevice']) {
+    assert.equal(executionEvidence({ ...result, [key]: false }).completedScope, null, key);
+  }
+  assert.equal(applicationOperation(result.kind), result.kind);
+  assert.equal(isSimpleProbe(result.kind), false);
+  assert.equal(canRepeat(result.kind), true);
+});
+
 test('comparison scopes require both components and cannot claim application readiness', () => {
   const resident = { kind: 'resident-opfs-tokenizer', success: true };
   assert.equal(executionEvidence(resident).completedScope, null);

@@ -4,16 +4,44 @@ index 8e45924db4..8978853859 100644
 +++ b/cmake/adjust_global_compile_flags.cmake
 @@ -16,6 +16,9 @@ if (NOT MSVC AND NOT onnxruntime_ENABLE_BITCODE)
  endif()
- 
+
  if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 +  if (onnxruntime_USE_WEBGPU)
 +    add_compile_definitions(ORT_WASM_EXTERNAL_RANGES)
 +  endif()
    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s ALLOW_UNIMPLEMENTED_SYSCALLS=1 -s DEFAULT_TO_CXX=1")
- 
+
    # Enable LTO for release single-thread build
+diff --git a/js/web/lib/wasm/proxy-wrapper.ts b/js/web/lib/wasm/proxy-wrapper.ts
+index 6c90d8b4b9..4561ac567a 100644
+--- a/js/web/lib/wasm/proxy-wrapper.ts
++++ b/js/web/lib/wasm/proxy-wrapper.ts
+@@ -11,7 +11,7 @@ import {
+   TensorMetadata,
+ } from './proxy-messages';
+ import * as core from './wasm-core-impl';
+-import { initializeWebAssembly } from './wasm-factory';
++import { getInstance, initializeWebAssembly } from './wasm-factory';
+ import {
+   importProxyWorker,
+   inferWasmPathPrefixFromScriptSrc,
+@@ -149,8 +149,14 @@ export const initializeWebAssemblyAndOrtRuntime = async (): Promise<void> => {
+     });
+   } else {
+     try {
++      const diagnostics = (globalThis as any).__ortExternalTensorLoader;
++      await diagnostics?.phase?.('ort-wasm-start');
+       await initializeWebAssembly(env.wasm);
++      if (diagnostics) diagnostics.getHeap = () => getInstance().HEAPU8;
++      await diagnostics?.phase?.('ort-wasm-complete');
++      await diagnostics?.phase?.('ort-environment-start');
+       await core.initRuntime(env);
++      await diagnostics?.phase?.('ort-environment-complete');
+       initialized = true;
+     } catch (e) {
+       aborted = true;
 diff --git a/js/web/lib/wasm/wasm-core-impl.ts b/js/web/lib/wasm/wasm-core-impl.ts
-index 18c536d8d9..bd65321aa7 100644
+index 18c536d8d9..8577e89159 100644
 --- a/js/web/lib/wasm/wasm-core-impl.ts
 +++ b/js/web/lib/wasm/wasm-core-impl.ts
 @@ -358,6 +358,19 @@ export const createSession = async (
@@ -36,16 +64,28 @@ index 18c536d8d9..bd65321aa7 100644
          loadingPromises.push(
            loadFile(typeof file === 'string' ? file : file.data).then((data) => {
              wasm.mountExternalData(path, data);
+@@ -393,7 +406,10 @@ export const createSession = async (
+       }
+     }
+
++    const diagnostics = (globalThis as any).__ortExternalTensorLoader;
++    await diagnostics?.phase?.('ort-session-start', { sessionDiagnosticsVersion: wasm.ortSessionDiagnosticsVersion ?? 0 });
+     sessionHandle = await wasm._OrtCreateSession(modelDataOffset, modelDataLength, sessionOptionsHandle);
++    if (sessionHandle !== 0) await diagnostics?.phase?.('ort-session-complete');
+     wasm.webgpuOnCreateSession?.(sessionHandle);
+     if (sessionHandle === 0) {
+       checkLastError("Can't create a session.");
 diff --git a/js/web/lib/wasm/wasm-types.ts b/js/web/lib/wasm/wasm-types.ts
-index 842bcd0c24..5b4a3a96b7 100644
+index 842bcd0c24..bd15c0c145 100644
 --- a/js/web/lib/wasm/wasm-types.ts
 +++ b/js/web/lib/wasm/wasm-types.ts
-@@ -468,13 +468,15 @@ export interface OrtWasmModule
- 
+@@ -468,13 +468,16 @@ export interface OrtWasmModule
+
    readonly PTR_SIZE: 4 | 8;
- 
+
 +  /** Versioned native WebGPU range-loading bridge, supported by Asyncify and JSPI builds. */
 +  ortRangeLoaderVersion?: number;
++  ortSessionDiagnosticsVersion?: number;
    /**
     * Mount the external data file to an internal map, which will be used during session initialization.
     *
@@ -62,9 +102,9 @@ index c577805e69..2b89da40de 100644
 --- a/onnxruntime/core/framework/external_data_loader.cc
 +++ b/onnxruntime/core/framework/external_data_loader.cc
 @@ -21,65 +21,93 @@ common::Status IExternalDataLoader::LoadTensor([[maybe_unused]] const Env& env,
- 
+
  #if defined(__wasm__)
- 
+
 +// EM_ASYNC_JS is lowered by Emscripten for both Asyncify and JSPI. Native
 +// WebGPU builds already enable one of these; no Promise crosses EM_ASM_INT.
 +#if defined(ORT_WASM_EXTERNAL_RANGES)
@@ -132,14 +172,14 @@ index c577805e69..2b89da40de 100644
 +                            const length = Number($2 >>> 0);
 +                            const dataIdOrBuffer = Number($3 >>> 0);
 +                            const loadType = $4;
- 
+
 -                               if (offset + length > fileData.byteLength) {
 -                                 return 3;  // Out of bounds.
 -                               }
 +                            if (offset + length > fileData.byteLength) {
 +                              return 3;  // Out of bounds.
 +                            }
- 
+
 -                               try {
 -                                 const data = fileData.subarray(offset, offset + length);
 -                                 switch (loadType) {
@@ -206,6 +246,69 @@ index c577805e69..2b89da40de 100644
    const char* err_msg;
    switch (err_code) {
      case 0:
+diff --git a/onnxruntime/core/framework/session_state.cc b/onnxruntime/core/framework/session_state.cc
+index 6ef2319c1d..7b5e270094 100644
+--- a/onnxruntime/core/framework/session_state.cc
++++ b/onnxruntime/core/framework/session_state.cc
+@@ -19,6 +19,25 @@
+ #include "core/providers/cpu/controlflow/utils.h"
+ #include "core/session/onnxruntime_session_options_config_keys.h"
+
++#if defined(ORT_WASM_EXTERNAL_RANGES)
++#include <emscripten.h>
++// Only suspend at session lifecycle boundaries, never inside a synchronous GPU callback.
++// clang-format off
++EM_ASYNC_JS(int, OrtCheckpointSessionPhase, (const char* stage), {
++  try {
++    await globalThis['__ortExternalTensorLoader']?.['phase']?.(UTF8ToString(stage >>> 0));
++    return 0;
++  } catch (error) {
++    console.error('[SESSION] phase checkpoint failed', error);
++    return 1;
++  }
++});
++// clang-format on
++#define ORT_SESSION_PHASE(stage) ORT_RETURN_IF(OrtCheckpointSessionPhase(stage), "Session checkpoint failed: ", stage)
++#else
++#define ORT_SESSION_PHASE(stage) do {} while (false)
++#endif
++
+ using namespace ::onnxruntime::common;
+
+ namespace onnxruntime {
+@@ -1619,6 +1638,7 @@ Status SessionState::FinalizeSessionStateImpl(const std::basic_string<PATH_CHAR_
+
+ #endif
+
++  ORT_SESSION_PHASE("ort-plan-start");
+   auto status = SequentialPlanner::CreatePlan(parent_node, *graph_viewer_, valid_outer_scope_node_args,
+                                               execution_providers_, kernel_create_info_map_,
+                                               subgraphs_kernel_create_info_maps,
+@@ -1703,6 +1723,7 @@ Status SessionState::FinalizeSessionStateImpl(const std::basic_string<PATH_CHAR_
+   }
+ #endif
+
++  ORT_SESSION_PHASE("ort-initializers-start");
+   ORT_RETURN_IF_ERROR(session_state_utils::SaveInitializedTensors(
+       Env::Default(), graph_location, *graph_viewer_,
+       GetAllocator(OrtDevice()),
+@@ -1730,11 +1751,16 @@ Status SessionState::FinalizeSessionStateImpl(const std::basic_string<PATH_CHAR_
+     CleanInitializedTensorsFromGraph();
+   }
+
++  ORT_SESSION_PHASE("ort-initializers-complete");
++  ORT_SESSION_PHASE("ort-kernels-start");
+   ORT_RETURN_IF_ERROR(CreateKernels(kernel_registry_manager));
++  ORT_SESSION_PHASE("ort-kernels-complete");
+
+   if (!disable_prepacking) {
++    ORT_SESSION_PHASE("ort-prepacking-start");
+     ORT_RETURN_IF_ERROR(PrepackConstantInitializedTensors(constant_initializers_use_count,
+                                                           session_options.initializers_to_share_map));
++    ORT_SESSION_PHASE("ort-prepacking-complete");
+   }
+
+   ORT_RETURN_IF_ERROR(
 diff --git a/onnxruntime/core/framework/session_state_utils.cc b/onnxruntime/core/framework/session_state_utils.cc
 index 254c520b4e..4898377b79 100644
 --- a/onnxruntime/core/framework/session_state_utils.cc
@@ -213,7 +316,7 @@ index 254c520b4e..4898377b79 100644
 @@ -32,6 +32,24 @@
  #include "core/framework/memory_info.h"
  #endif
- 
+
 +#if defined(ORT_WASM_EXTERNAL_RANGES)
 +#include <emscripten.h>
 +// Persist metadata before AllocateTensor can create a large CPU/GPU allocation.
@@ -234,7 +337,7 @@ index 254c520b4e..4898377b79 100644
 +
  namespace onnxruntime {
  namespace session_state_utils {
- 
+
 @@ -102,6 +120,10 @@ static common::Status DeserializeTensorProto(const Env& env, const std::basic_st
    if (utils::HasExternalData(tensor_proto)) {
      auto external_data_loader = external_data_loader_mgr.GetExternalDataLoader(memory_info);
@@ -253,7 +356,7 @@ index 146355f6a4..24e51f907c 100644
 @@ -208,6 +208,17 @@ Module["webgpuInit"] = (setDefaultDevice) => {
      };
    };
- 
+
 +  Module["ortGetExternalGpuTarget"] = (bufferHandle) => {
 +    if (!webgpuCurrentDevice) {
 +      const deviceHandle = _OrtGetWebGpuDevice(webgpuCurrentDeviceId);
@@ -269,10 +372,10 @@ index 146355f6a4..24e51f907c 100644
    Module.webgpuUploadExternalBuffer = (bufferHandle, data) => {
      const srcArrayBuffer = data.buffer;
 diff --git a/onnxruntime/wasm/pre.js b/onnxruntime/wasm/pre.js
-index f8a7fa0286..1d754bf774 100644
+index f8a7fa0286..95bb79ca0e 100644
 --- a/onnxruntime/wasm/pre.js
 +++ b/onnxruntime/wasm/pre.js
-@@ -53,3 +53,20 @@ var SharedArrayBuffer =
+@@ -53,3 +53,23 @@ var SharedArrayBuffer =
    // this is because prettier will remove the quotes around the property names, but we need to keep them
    // because otherwise closure compiler may rename them and break the code.
    new WebAssembly.Memory({ "initial": 0, "maximum": 0, "shared": true }).buffer.constructor;
@@ -293,3 +396,6 @@ index f8a7fa0286..1d754bf774 100644
 +    "getHeap": () => HEAPU8,
 +  });
 +};
++
++// Additive lifecycle checkpoints; range source ABI remains 2.
++Module["ortSessionDiagnosticsVersion"] = 1;

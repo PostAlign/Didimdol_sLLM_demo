@@ -6,13 +6,14 @@ export const STAGING_MIB = [2, 4, 8, 16, 32, 64];
 /** Called inside OrtCreateSession by the patched EM_ASYNC_JS bridge. */
 export class SessionRangeLoader {
   constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal,
-    gpuLedger = () => null, gpuTracker = null, storage = () => null, clock = () => performance.now() }) {
+    gpuLedger = () => null, gpuTracker = null, weightRole = 'weight', storage = () => null, clock = () => performance.now() }) {
     if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 2, 4, 8, 16, 32 or 64');
     this.stagingBytes = stagingMiB * 2 ** 20;
     this.checkpoint = checkpoint;
     this.emit = emit;
     this.signal = signal;
     this.gpuTracker = gpuTracker;
+    this.weightRole = weightRole;
     this.gpuLedger = gpuTracker ? () => gpuTracker.ledger : gpuLedger;
     this.clock = clock;
     this.storage = storage;
@@ -71,6 +72,13 @@ export class SessionRangeLoader {
       this.lossSaved = this.record('device-lost').then(() => this.event('device-lost'));
     });
   }
+  async phase(stage, details = {}) {
+    this.check();
+    if (this.closed) throw new Error('Session phase after loader close');
+    if (!stage.startsWith('ort-')) throw new Error('Invalid ORT lifecycle phase');
+    await this.checkpoint({ stage, ...details, metrics: this.sampleMetrics(), gpuLedger: this.gpuLedger(),
+      ortWasmInstantiated: stage === 'ort-wasm-complete' || undefined });
+  }
   async beforeAllocate(name, isCpu) {
     this.check();
     if (this.closed) throw new Error('Initializer allocation after session creation');
@@ -115,7 +123,7 @@ export class SessionRangeLoader {
       // alone cannot guarantee that the main thread saved the crash position in time.
       if (gpu) {
         this.observeDevice(gpu.device);
-        this.gpuTracker?.observeBuffer(gpu.device, gpu.buffer);
+        this.gpuTracker?.observeBuffer(gpu.device, gpu.buffer, this.weightRole);
         // Allocation scopes are opened by createBuffer interception, before the
         // native buffer exists. Persist their result before uploading any bytes.
         await this.gpuTracker?.flush();

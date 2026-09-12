@@ -19,6 +19,9 @@ function fixture() {
       if (this.allocationError) this.scopes.findLast(s => s.filter === 'out-of-memory').error = this.allocationError;
       return new Buffer(descriptor);
     }
+    createShaderModule() { return { shader: true }; }
+    createComputePipeline() { return { pipeline: true }; }
+    createComputePipelineAsync() { return this.pipelinePromise ||= Promise.resolve({ pipeline: true }); }
   }
   class Adapter {
     limits = { maxBufferSize: 2 ** 30, maxStorageBufferBindingSize: 2 ** 28 };
@@ -56,6 +59,34 @@ test('another GPU wrapper and multiple native devices are tracked without double
     assert.equal(tracked.ledger.requestedPeak, 120);
   } finally { tracked.restore(); }
   assert.equal(f.Device.prototype.createBuffer, original);
+});
+
+test('buffer categories and compilation counters preserve synchronous APIs and original promises', async () => {
+  const f = fixture();
+  const tracked = await installGpuTracking(40, () => {}, { ...f.options, context: () => ({ observedDuring: 'ort-initializers-start' }) });
+  try {
+    const device = await (await f.options.gpu.requestAdapter()).requestDevice();
+    const weight = device.createBuffer({ size: 40, usage: 136 });
+    const tiny = device.createBuffer({ size: 8, usage: 72 });
+    tracked.observeBuffer(device, weight);
+    tracked.observeBuffer(device, tiny, 'runtime-weight');
+    assert.equal(device.createShaderModule().shader, true);
+    assert.equal(device.createComputePipeline().pipeline, true);
+    const promise = device.createComputePipelineAsync();
+    assert.equal(promise, device.pipelinePromise);
+    await promise; await tracked.flush();
+    assert.equal(tracked.ledger.programs.shaderModules, 1);
+    assert.equal(tracked.ledger.programs.asyncPipelinesCompleted, 1);
+    assert.equal(tracked.ledger.programs.coverage, 'complete');
+    const groups = Object.fromEntries(tracked.ledger.categories.map(entry => [entry.role, entry]));
+    assert.equal(groups.weight.requestedCurrent, 40);
+    assert.equal(groups['runtime-weight'].requestedCurrent, 8);
+    assert.equal(groups.other.requestedCurrent, 0);
+    assert.equal(tracked.ledger.recentAllocations[0].usage, 136);
+    assert.equal(tracked.ledger.recentAllocations[0].stage, 'ort-initializers-start');
+    weight.destroy(); device.destroy();
+    assert.ok(tracked.ledger.categories.every(entry => entry.requestedCurrent === 0 && entry.liveCount === 0));
+  } finally { tracked.restore(); }
 });
 
 test('late binding repairs observed counts without inventing historical peaks or mapped allocations', async () => {

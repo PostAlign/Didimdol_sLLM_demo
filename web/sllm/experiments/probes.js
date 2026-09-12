@@ -4,40 +4,47 @@ import { OpfsWeightStore } from '../opfs-store.js';
 import { installGpuTracking } from '../gpu-device.js';
 import { FIXTURE } from './fixture.js';
 import { loadOrt } from '../ort-runtime.js';
+import { disposeResources } from '../cleanup.js';
 
 /** Use every uploaded element while retaining all weight buffers until the end. No ORT import. */
-export async function residentProbe(manifest, checkpoint, stagingMiB = 8, store = null) {
+export async function residentProbe(manifest, checkpoint, stagingMiB = 8, store = null, borrowed = null) {
   if (!STAGING_MIB.includes(stagingMiB)) throw new Error('Invalid staging size');
   const persist = checkpoint;
-  let current = {}, tracked;
-  tracked = await installGpuTracking(manifest.largestInitializerBytes, record => {
+  let current = {}, tracked, primaryError;
+  tracked = borrowed?.tracker || await installGpuTracking(manifest.largestInitializerBytes, record => {
     if (['gpu-error', 'gpu-uncaptured-error', 'device-lost'].includes(record.stage)) {
       return persist({ ...record, gpuLedger: tracked?.ledger });
     }
   }, { context: () => gpuOperationContext(current) });
   checkpoint = async record => {
     current = record;
+    borrowed?.signal?.throwIfAborted();
     await tracked.flush();
-    await persist({ ...record, gpuLedger: tracked.ledger, ...(store ? { storage: { ...store.metrics } } : {}) });
+    await persist({ ...record, ...borrowed?.details?.(), gpuLedger: tracked.ledger, ...(store ? { storage: { ...store.metrics } } : {}) });
     if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
   };
   try {
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error('WebGPU adapter unavailable');
-    const largest = manifest.largestInitializerBytes;
-    const device = await adapter.requestDevice({ requiredLimits: {
-      maxBufferSize: Math.max(268435456, largest), maxStorageBufferBindingSize: Math.max(134217728, largest),
-    } });
+    let device = borrowed?.device;
+    if (!device) {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) throw new Error('WebGPU adapter unavailable');
+      const largest = manifest.largestInitializerBytes;
+      device = await adapter.requestDevice({ requiredLimits: {
+        maxBufferSize: Math.max(268435456, largest), maxStorageBufferBindingSize: Math.max(134217728, largest),
+      } });
+    }
+    if (manifest.largestInitializerBytes > Math.min(device.limits.maxBufferSize, device.limits.maxStorageBufferBindingSize)) {
+      throw new Error('Resident weights exceed the retained ORT device limits');
+    }
     const buffers = [];
-    let allocated = 0, uploaded = 0, writeReturned = 0, lost, closed = false, lossSaved = Promise.resolve();
+    let allocated = 0, uploaded = 0, writeReturned = 0, lost, closed = false, lossSaved = Promise.resolve(), probeError;
     device.lost.then(info => {
-      if (closed && info.reason === 'destroyed') return;
+      if (closed) return;
       lost = { reason: info.reason, message: info.message };
       lossSaved = checkpoint({ stage: 'device-lost', info: lost, gpuWeightAllocated: allocated, gpuWeightUploaded: uploaded });
     });
-    device.addEventListener('uncapturederror', event => {
-      void checkpoint({ stage: 'gpu-uncaptured-error', ...errorDetails(event.error) });
-    });
+    const onError = event => { void checkpoint({ stage: 'gpu-uncaptured-error', ...errorDetails(event.error) }); };
+    device.addEventListener('uncapturederror', onError);
     device.pushErrorScope('out-of-memory');
     device.pushErrorScope('validation');
     let scopes = 2;
@@ -56,6 +63,7 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8, store 
       const output = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
       const readback = device.createBuffer({ size: 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       buffers.push(output, readback);
+      tracked.setBufferRole(output, 'verification'); tracked.setBufferRole(readback, 'verification');
       const scratch = new Float32Array(stagingMiB * 2**20 / 4).fill(1);
       const scratchBytes = new Uint8Array(scratch.buffer), words = new Uint32Array(scratch.buffer);
       const expected = new Uint32Array(64);
@@ -130,14 +138,27 @@ export async function residentProbe(manifest, checkpoint, stagingMiB = 8, store 
         loadedInitializerCount: count, expectedInitializerCount: count, gpuValidatedInitializerCount: count,
         gpuLedger: tracked.ledger, expectedBytes: manifest.totalExternalTensorBytes, allBytesUsed: true,
         inputSource: store ? 'opfs-cache' : 'synthetic', allocationOrder: 'manifest', verification: 'u32-fnv1a-64-lanes-v1',
-        cpuStagingBytes: scratch.byteLength + expected.byteLength };
-    } finally {
-      while (scopes) { scopes--; await device.popErrorScope(); }
-      await lossSaved; closed = true;
+        cpuStagingBytes: scratch.byteLength + expected.byteLength, residentDeviceId: tracked.ledger.tracking.activeDeviceId };
+    } catch (error) { probeError = error; throw error; }
+    finally {
+      closed = true;
+      device.removeEventListener('uncapturederror', onError);
+      // The outer owner always destroys its device, including allocation/limit
+      // failures before the inner scope was entered. Borrowers release only buffers.
+      const cleanup = await disposeResources({ timeoutMs: 1000, releaseSession: async () => {
+        while (scopes) { scopes--; await device.popErrorScope(); }
+        await lossSaved;
+      } });
       for (const buffer of buffers) buffer.destroy();
-      device.destroy();
+      if (!cleanup.success && !probeError) throw new Error(`Resident cleanup failed: ${JSON.stringify(cleanup.errors)}`);
     }
-  } finally { await tracked.flush(); tracked.restore(); }
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    if (!borrowed) {
+      const cleanup = await disposeResources({ tracker: tracked });
+      if (!cleanup.success && !primaryError) throw new Error(`Resident device cleanup failed: ${JSON.stringify(cleanup.errors)}`);
+    }
+  }
 }
 
 async function prepareFixture(store, checkpoint) {
@@ -154,7 +175,7 @@ async function prepareFixture(store, checkpoint) {
   }
 }
 
-export async function opfsResidentProbe(manifest, checkpoint, stagingMiB, fixture) {
+export async function opfsResidentProbe(manifest, checkpoint, stagingMiB, fixture, borrowed = null) {
   const store = await OpfsWeightStore.open(manifest);
   let result;
   try {
@@ -169,14 +190,21 @@ export async function opfsResidentProbe(manifest, checkpoint, stagingMiB, fixtur
     }
     store.finishPreparation();
     await checkpoint({ stage: 'weights-prepared', storage: { ...store.metrics } });
-    result = await residentProbe(manifest, checkpoint, stagingMiB, store);
+    result = await residentProbe(manifest, checkpoint, stagingMiB, store, borrowed);
   } finally { store.close(); }
   return { ...result, storage: { ...store.metrics } };
 }
 
-export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingMiB = 8) {
+export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingMiB = 8, options = {}) {
   if (!['asyncify', 'jspi'].includes(mode)) throw new Error('Invalid runtime mode');
   if (mode === 'jspi' && !(WebAssembly.Suspending && WebAssembly.promising)) throw new Error('이 브라우저는 JSPI를 지원하지 않습니다.');
+  const persist = checkpoint;
+  let current = {}, primaryError;
+  checkpoint = async record => {
+    current = record;
+    options.signal?.throwIfAborted();
+    return persist(record);
+  };
   const { ort } = await loadOrt(mode);
   const manifest = FIXTURE.manifest;
   const store = await OpfsWeightStore.open(manifest);
@@ -187,8 +215,10 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
     await checkpoint({ stage: 'weights-prepared', storage: { ...store.metrics } });
     tracked = await installGpuTracking(manifest.largestInitializerBytes, record => {
       if (['gpu-error', 'gpu-uncaptured-error', 'device-lost'].includes(record.stage)) return checkpoint(record);
-    }, { context: () => ({ initializerName: loader?.last?.initializerName }) });
-    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuTracker: tracked, storage: () => store.metrics });
+    }, { context: () => gpuOperationContext(current) });
+    options.onTracker?.(tracked);
+    loader = new SessionRangeLoader({ manifest, stagingMiB, checkpoint, gpuTracker: tracked,
+      weightRole: options.residentManifest ? 'runtime-weight' : 'weight', signal: options.signal, storage: () => store.metrics });
     globalThis.__ortExternalTensorLoader = loader;
     await checkpoint({ stage: 'runtime-create', expectedInitializerCount: manifest.initializers.filter(t => t.location).length });
     const graph = Uint8Array.from(atob(FIXTURE.graph), c => c.charCodeAt(0));
@@ -201,13 +231,31 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
     const reads = loader.metrics.rangeReadCount;
     for (let i = 0; i < 2; i++) {
       const input = new ort.Tensor('float32', new Float32Array(1024).fill(1), [1, 1024]);
-      const outputs = await session.run({ X: input });
+      let outputs;
       try {
+        outputs = await session.run({ X: input });
         if (outputs.Y.data.length !== 2560 || outputs.Y.data.some(v => v !== 1024.5)) throw new Error('Wrong FP32 fixture output');
-      } finally { input.dispose(); outputs.Y.dispose(); }
+      } finally { input.dispose(); outputs?.Y.dispose(); }
     }
     if (loader.metrics.rangeReadCount !== reads) throw new Error('Weights read during inference');
     await checkpoint({ stage: 'runtime-inference-complete', metrics: loader.sampleMetrics(), storage: { ...store.metrics } });
+    if (options.residentManifest) {
+      const runtimeDeviceId = tracked.ledger.tracking.activeDeviceId;
+      const runtimeGpuBeforeResidency = tracked.ledger;
+      const details = () => ({ runtimeMetrics: loader.sampleMetrics(), runtimeDeviceId, smallSessionRetained: true });
+      await checkpoint({ stage: 'runtime-resident-start', ...details(), runtimeGpuBeforeResidency });
+      const result = await opfsResidentProbe(options.residentManifest, checkpoint, stagingMiB, !!options.fixture, {
+        tracker: tracked, device: tracked.device, details, signal: options.signal,
+      });
+      if (result.residentDeviceId !== runtimeDeviceId || tracked.ledger.tracking.deviceCount !== 1) {
+        throw new Error('Combined comparison must use the same ORT GPUDevice');
+      }
+      // The small session remains reachable through verification of the final weight.
+      if (!session) throw new Error('Small runtime session was released during residency');
+      return { ...result, ...details(), runtimeGpuBeforeResidency, runtimeStorage: { ...store.metrics },
+        sameDevice: true, ortWasmInstantiated: true, inferenceVerified: true,
+        modelSessionCreated: false, tokenizerPrepared: false };
+    }
     await checkpoint({ stage: 'runtime-idle-start', idleSeconds });
     const idleStart = performance.now();
     for (let elapsed = 0; elapsed < idleSeconds; elapsed += 5) {
@@ -222,14 +270,11 @@ export async function runtimeProbe(mode, checkpoint, idleSeconds = 120, stagingM
     if (tracked.ledger.lastError) throw new Error(`WebGPU: ${tracked.ledger.lastError}`);
     return { inferenceVerified: true, metrics: { ...loader.metrics }, storage: { ...store.metrics }, gpuLedger: { ...tracked.ledger },
       idleSeconds, idleElapsedMs, idleAcceptanceCompleted: idleSeconds >= 120 && idleElapsedMs >= 120000 };
-  } finally {
-    store.close();
-    if (loader && !loader.closed) loader.close(false);
-    await loader?.lossSaved;
-    await session?.release();
-    await tracked?.flush();
-    for (const gpuDevice of tracked?.devices || []) gpuDevice.destroy();
-    tracked?.restore();
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    const cleanup = await disposeResources({ store, loader, tracker: tracked, releaseSession: () => session?.release() });
+    await options.onCleanup?.(cleanup);
+    if (!cleanup.success && !primaryError) throw new Error(`Runtime cleanup failed: ${JSON.stringify(cleanup.errors)}`);
   }
 }
 

@@ -5,11 +5,12 @@ const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || '
 const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
-import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext } from './diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint } from './diagnostics.js';
 import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
-import { opfsResidentProbe } from './experiments/probes.js';
+import { disposeResources } from './cleanup.js';
+import { opfsResidentProbe, runtimeProbe } from './experiments/probes.js';
 
 import { makeRouge1 } from './rouge.js';
 
@@ -284,7 +285,6 @@ async function loadModelSession(stagingMiB, timings, loadOrder) {
   } finally {
     timings.modelLoadCallMs ??= performance.now() - modelCallStarted;
     await tracked.flush();
-    if (!success) tracked.restore();
     await loader.lossSaved;
     const metrics = loader.close(success);
     weightStore.close();
@@ -322,6 +322,37 @@ async function loadResidentComparison(data) {
     tokenizerPrepared: !!tokenizer, modelSessionCreated: false, ortWasmInstantiated: false };
   await journal.finish('complete', summary);
   post({ type: 'result', result: summary });
+}
+
+async function loadRuntimeResident(data) {
+  const response = await fetch(new URL('../../model/initializers.json', import.meta.url));
+  if (!response.ok) throw new Error(`Initializer manifest HTTP ${response.status}`);
+  const manifest = await response.json();
+  if (manifest.revision !== REVISION) throw new Error('Manifest/model revision mismatch');
+  const result = await runtimeProbe(runtimeMode, async record => {
+    await journal.checkpoint(record);
+    if (['resident-allocate', 'resident-complete', 'runtime-resident-start'].includes(record.stage)) post({ type: 'diagnostic', record });
+  }, 0, data.stagingMiB ?? 8, { residentManifest: manifest, signal: loadController.signal,
+    onTracker: tracked => { trackedGpu = tracked; },
+    onCleanup: async cleanup => {
+      cleanupPromise = Promise.resolve(cleanup);
+      await saveCheckpoint(cleanup, `cleanup:${journal.state.runId}`);
+    } });
+  const summary = { ...result, success: !journal.state.fault };
+  await journal.finish('complete', summary);
+  post({ type: 'result', result: summary });
+}
+
+let cleanupPromise;
+async function cleanupWorker() {
+  return cleanupPromise ||= (async () => {
+    const session = model;
+    model = null; tokenizer = null; tokenizerResult = null; chatTemplate = null; rows = null; rouge1 = null;
+    const cleanup = await disposeResources({ store: weightStore, loader: globalThis.__ortExternalTensorLoader,
+      tracker: trackedGpu, releaseSession: () => session?.dispose() });
+    if (journal) await saveCheckpoint(cleanup, `cleanup:${journal.state.runId}`);
+    return cleanup;
+  })();
 }
 
 // ── 한 행 실행 ──────────────────────────────────────────────────────────────
@@ -475,22 +506,17 @@ async function runProbe(maxNewTokens = 32) {
   post({ type: 'probe-result', result });
 }
 
-const preparationOperations = new Set(['load', 'tokenizer', 'session-only', 'resident-opfs', 'resident-opfs-tokenizer']);
+const preparationOperations = new Set(['load', 'tokenizer', 'session-only', 'resident-opfs', 'resident-opfs-tokenizer', 'runtime-resident']);
 self.onmessage = async ({ data }) => {
   if (data.type === 'stop') { aborted = true; loadController?.abort(); stopper.interrupt(); return; }
   if (data.type === 'dispose') {
     if (operation) { queuedRun = data; return; }
     operation = 'dispose';
     try {
-      await model?.dispose(); model = null;
-      tokenizer = null; tokenizerResult = null; chatTemplate = null; rows = null; rouge1 = null;
-      for (const gpuDevice of trackedGpu?.devices || []) await gpuDevice.queue.onSubmittedWorkDone();
-      await trackedGpu?.flush();
-      for (const gpuDevice of trackedGpu?.devices || []) gpuDevice.destroy();
-      trackedGpu?.restore();
-      post({ type: 'disposed' });
+      const cleanup = await cleanupWorker();
+      post({ type: 'disposed', cleanup, error: cleanup.success ? null : JSON.stringify(cleanup.errors) });
     } catch (error) { post({ type: 'disposed', error: String(error) }); }
-    finally { trackedGpu?.restore(); operation = null; }
+    finally { operation = null; }
     return;
   }
   if (!preparationOperations.has(data.type) && !['run', 'probe'].includes(data.type)) return;
@@ -500,10 +526,11 @@ self.onmessage = async ({ data }) => {
   if (preparationOperations.has(operation)) loadController = new AbortController();
   const resident = ['resident-opfs', 'resident-opfs-tokenizer'].includes(operation);
   const loadOrder = { tokenizer: 'tokenizer-only', 'session-only': 'session-only',
-    'resident-opfs': 'residency-only', 'resident-opfs-tokenizer': 'tokenizer-before-residency' }[operation] || LOAD_ORDER;
+    'resident-opfs': 'residency-only', 'resident-opfs-tokenizer': 'tokenizer-before-residency', 'runtime-resident': 'runtime-before-residency' }[operation] || LOAD_ORDER;
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
     runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder,
     stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+    diagnosticsMode: data.environment?.diagnosticsMode || new URL(self.location.href).searchParams.get('diagnosticsMode') || 'compact',
     workerURL: self.location.href });
   try {
     journal.state.environment.build = buildIdentity(runtimeBuild);
@@ -524,7 +551,8 @@ self.onmessage = async ({ data }) => {
       if (!resident && runtimeBuild.rangeLoaderVersion !== 2) throw new Error('런타임을 새로 빌드해야 합니다: range-loader ABI 2 필요');
       const execute = async lock => {
         if (!lock) throw new Error('다른 탭에서 모델을 준비 중입니다. 해당 작업이 끝난 후 다시 시도해 주세요.');
-        if (resident) await loadResidentComparison(data);
+        if (data.type === 'runtime-resident') await loadRuntimeResident(data);
+        else if (resident) await loadResidentComparison(data);
         else await load(data, data.type === 'session-only');
       };
       if (navigator.locks) await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute);
@@ -536,11 +564,10 @@ self.onmessage = async ({ data }) => {
     }
   } catch (err) {
     const cancelled = preparationOperations.has(data.type) && loadController?.signal.aborted;
-    await trackedGpu?.flush();
-    trackedGpu?.restore();
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,
       tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage });
-    // A failed create/generate may retain native allocations. Use a fresh worker/page.
+    await cleanupWorker();
+    // A failed create/generate is terminal; cleanup does not authorize reuse.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
   } finally {
     weightStore?.close();

@@ -1,4 +1,4 @@
-import { RunDiagnostics, newRunId, buildIdentity } from '../diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, saveCheckpoint } from '../diagnostics.js';
 import { STAGING_MIB } from '../range-loader.js';
 import { FIXTURE } from './fixture.js';
 import { runtimeRelease } from '../ort-runtime.js';
@@ -32,7 +32,16 @@ self.onmessage = async ({ data }) => {
         };
         result = navigator.locks ? await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute) : await execute(true);
       }
-    } else if (data.kind === 'runtime') result = await runtimeProbe(mode, checkpoint, idleSeconds, stagingMiB);
+    } else if (data.kind === 'runtime' || data.kind === 'runtime-resident') {
+      const options = { onCleanup: cleanup => saveCheckpoint(cleanup, `cleanup:${journal.state.runId}`) };
+      if (data.kind === 'runtime-resident') {
+        if (!data.fixture) throw new Error('Production combined comparison uses the application worker');
+        options.residentManifest = FIXTURE.manifest; options.fixture = true;
+      }
+      const execute = () => runtimeProbe(mode, checkpoint, idleSeconds, stagingMiB, options);
+      result = data.kind === 'runtime-resident' && navigator.locks
+        ? await navigator.locks.request('didimdol-model-load', execute) : await execute();
+    }
     else throw new Error(`Unknown experiment: ${data.kind}`);
     result = { ...result, success: !journal.state.fault, durationMs: performance.now() - start,
       releaseId: build.releaseId, stagingMiB, environment: journal.state.environment };

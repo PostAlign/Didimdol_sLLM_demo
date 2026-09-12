@@ -226,7 +226,7 @@ export function initSllm(root) {
   }
   $('#exportDiagnostics').onclick = async () => {
     const runs = await Promise.all(history.map(readRun));
-    const blob = new Blob([JSON.stringify({ schemaVersion: 3, exportedAt: new Date().toISOString(),
+    const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(),
       userAgent: navigator.userAgent, activeRun: readStored(ATTEMPT_KEY, null),
       lifecycle: readStored('didimdol.lifecycle.v2', []), runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -240,9 +240,10 @@ export function initSllm(root) {
   const runtimeOptions = new URLSearchParams(location.search);
   workerURL.searchParams.set('ortMode', runtimeOptions.get('ortMode') || 'asyncify');
   const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
+  workerURL.searchParams.set('diagnosticsMode', runtimeOptions.get('diagnosticsMode') || 'compact');
   workerURL.searchParams.set('trace', runtimeOptions.get('trace') || '0');
   const worker = new Worker(workerURL, { type: 'module' });
-  let loaded = false, chosen = null, nRows = 100;
+  let loaded = false, chosen = null, nRows = 100, stoppingLoad = false;
 
   // 모듈 import 실패 등 워커 스크립트 자체의 오류는 onmessage 로 오지 않는다.
   worker.onerror = async (e) => {
@@ -270,7 +271,13 @@ export function initSllm(root) {
           els.phase.textContent = 'GPU 연결이 끊겼습니다. 페이지를 새로 열어 다시 시도해 주세요.';
           els.start.disabled = true; els.stop.disabled = true;
           clearAttempt();
-          worker.terminate();
+          // The durable device-loss fault is already saved. Allow the worker's
+          // failure/disposal path to release remaining resources before termination.
+          const terminate = () => { clearTimeout(timer); worker.removeEventListener('message', disposed); worker.terminate(); };
+          const disposed = ({ data }) => { if (data.type === 'disposed') terminate(); };
+          const timer = setTimeout(terminate, 5000);
+          worker.addEventListener('message', disposed);
+          worker.postMessage({ type: 'dispose' });
         } else {
           els.phase.textContent = `가중치 업로드 ${m.record.metrics.loadedInitializerCount}개 완료 · ${m.record.initializerName}`;
         }
@@ -285,6 +292,7 @@ export function initSllm(root) {
         console.warn('fallback:', m.why);
         break;
       case 'ready':
+        if (stoppingLoad) { worker.postMessage({ type: 'dispose' }); break; }
         clearAttempt();
         badge(`${m.device === 'webgpu' ? '⚡ WebGPU' : '🐢 WASM(CPU)'} · fp32 로 실행 중`,
               m.device === 'webgpu' ? 'gpu' : 'cpu');
@@ -306,6 +314,9 @@ export function initSllm(root) {
         clearAttempt();
         els.phase.textContent = `중단됨 (${m.at}행까지 실행)`;
         els.start.disabled = false; els.stop.disabled = true;
+        break;
+      case 'disposed':
+        if (stoppingLoad) void finishStoppedLoad(activeRun?.runId);
         break;
       case 'fatal':
         clearAttempt();
@@ -354,23 +365,25 @@ export function initSllm(root) {
       worker.postMessage({ type: 'load', device: p.device, stagingMiB, runId, environment });
     }
   };
+  async function finishStoppedLoad(runId) {
+    if (!runId || readStored(ATTEMPT_KEY, null)?.runId !== runId) return;
+    worker.terminate(); clearAttempt(); loaded = false;
+    const run = await readRun(runId);
+    await saveCheckpoint({ ...run, runId, status: 'cancelled',
+      last: { stage: 'user-cancelled', timestamp: Date.now() } }, runKey(runId));
+    els.prep.hidden = true; els.start.disabled = true;
+    els.phase.textContent = '중단됨 · 페이지를 새로 열어 다시 시작해 주세요.';
+  }
   els.stop.onclick = () => {
     els.stop.disabled = true;
     els.phase.textContent = '중단하는 중…';
-    worker.postMessage({ type: 'stop' });
+    stoppingLoad = !loaded;
     const runId = activeRun?.runId;
-    // A GPU wait cannot always be interrupted by an AbortSignal. The window can
-    // end the worker and record an intentional stop even when the GPU is stuck.
-    setTimeout(async () => {
-      if (!runId || readStored(ATTEMPT_KEY, null)?.runId !== runId) return;
-      worker.terminate();
-      const run = await readRun(runId);
-      await saveCheckpoint({ ...run, runId, status: 'cancelled',
-        last: { stage: 'user-cancelled', timestamp: Date.now() } }, runKey(runId));
-      clearAttempt(); loaded = false;
-      els.prep.hidden = true; els.start.disabled = true;
-      els.phase.textContent = '중단됨 · 페이지를 새로 열어 다시 시작해 주세요.';
-    }, 3000);
+    worker.postMessage({ type: 'stop' });
+    if (stoppingLoad) worker.postMessage({ type: 'dispose' });
+    // Cooperative cleanup has four seconds; retain a bounded fallback when a
+    // native call cannot be interrupted. Evaluation cancellation can reuse its session.
+    setTimeout(() => { void finishStoppedLoad(runId); }, 5000);
   };
 
   // ── 부팅 ────────────────────────────────────────────────────────────────────

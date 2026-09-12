@@ -1,10 +1,97 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, recoveryEvidence, diagnosticSummary } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary } from '../web/sllm/diagnostics.js';
+
+const snapshotRun = (id, environment, persist) => new RunDiagnostics(id, { ...environment, diagnosticsMode: 'snapshot' }, persist);
+
+function journalStore() {
+  const values = new Map(), writes = [];
+  return {
+    values, writes, failNext: false,
+    async persistBatch(entries) {
+      writes.push(structuredClone(entries));
+      if (this.failNext) { this.failNext = false; return false; }
+      for (const [key, value] of entries) values.set(key, structuredClone(value));
+      return true;
+    },
+    read: async key => values.get(key),
+    readEntries: async id => [...values].filter(([key]) => key.startsWith(`journal:${id}:`)).map(([, value]) => value),
+  };
+}
+
+test('incremental journals recover an interrupted pre-call checkpoint and retry atomic metadata after failure', async () => {
+  const store = journalStore();
+  const run = new RunDiagnostics('compact', { build: { releaseId: 'pinned' } }, undefined,
+    { persistBatch: entries => store.persistBatch(entries) });
+  store.failNext = true;
+  assert.equal(await run.checkpoint({ stage: 'graph-verified', expectedInitializerCount: 251 }), false);
+  await run.checkpoint({ stage: 'ort-initializers-start' });
+  for (let i = 0; i < 70; i++) await run.checkpoint({ stage: 'allocate-initializer', initializerName: `W${i}`, length: 40 });
+  await run.checkpoint({ stage: 'gpu-wait', phase: 'before-call', destinationOffset: 8,
+    metrics: { gpuWriteReturnedBytes: 16, gpuQueueCompletedBytes: 8 } });
+  const recovered = await readRun('compact', store);
+  assert.equal(recovered.status, 'running');
+  assert.equal(recovered.last.stage, 'gpu-wait');
+  assert.equal(recovered.last.metrics.gpuQueueCompletedBytes, 8);
+  assert.equal(recovered.milestones['graph-verified'].expectedInitializerCount, 251);
+  assert.ok(recovered.milestones['ort-initializers-start']);
+  assert.equal(recovered.initializerOrder.length, 70);
+  assert.equal(recovered.records.length, 64);
+  assert.equal(recovered.persistence.failures, 1);
+  assert.equal(recovered.environment.build.releaseId, 'pinned');
+  assert.equal(store.writes.slice(2).some(entries => entries.some(([key]) => key === 'run:compact')), false, 'header is saved once after successful retry');
+  assert.equal(store.values.size, 1 + 1 + 64 + 70 + 2, 'history cannot grow beyond the ring');
+  await run.checkpoint({ stage: 'gpu-error', message: 'original allocation failure' });
+  await run.finish('failed', { error: 'outer failure' });
+  store.values.set('cleanup:compact', { success: false, errors: ['cleanup error'] });
+  const failed = await readRun('compact', store);
+  assert.equal(failed.firstFault.message, 'original allocation failure');
+  assert.equal(failed.summary.error, 'outer failure');
+  assert.equal(failed.cleanup.success, false);
+  assert.equal(failed.last.stage, 'failed');
+});
+
+test('incremental writes reduce serialized payload while preserving legacy and snapshot exports', async () => {
+  const store = journalStore();
+  assert.equal(await readRun(undefined, store), null);
+  assert.equal(await readRun(null, store), null);
+  const environment = { build: { releaseId: 'release', inventory: 'x'.repeat(12000) } };
+  const run = new RunDiagnostics('compact-bytes', environment, undefined, { persistBatch: entries => store.persistBatch(entries) });
+  let snapshotBytes = 0;
+  const snapshot = snapshotRun('snapshot-bytes', environment, async state => { snapshotBytes += JSON.stringify(state).length; return true; });
+  for (let i = 0; i < 200; i++) {
+    const record = { stage: 'gpu-wait', destinationOffset: i * 8, phase: 'before-call',
+      metrics: { gpuWeightAllocated: 40, gpuQueueCompletedBytes: i * 8 } };
+    await run.checkpoint(record); await snapshot.checkpoint(record);
+  }
+  const compactBytes = store.writes.reduce((sum, entries) => sum + JSON.stringify(entries).length, 0);
+  assert.ok(compactBytes < snapshotBytes / 5, `${compactBytes} vs ${snapshotBytes}`);
+  for (const schemaVersion of [2, 3]) {
+    const old = { schemaVersion, runId: `legacy-${schemaVersion}`, status: 'running', last: { stage: 'gpu-wait' } };
+    store.values.set(`run:${old.runId}`, old);
+    assert.deepEqual(await readRun(old.runId, store), old);
+  }
+});
+
+test('oversized recent records are bounded without losing the durable latest position or original fault', async () => {
+  const store = journalStore();
+  const run = new RunDiagnostics('bounded', {}, undefined, { persistBatch: entries => store.persistBatch(entries) });
+  const message = 'failure detail '.repeat(4000);
+  await run.checkpoint({ stage: 'gpu-error', message, destinationOffset: 24 });
+  const interrupted = await readRun('bounded', store);
+  assert.equal(interrupted.last.message, message);
+  assert.equal(interrupted.firstFault.message, message);
+  assert.equal(interrupted.records[0].historyTruncated, true);
+  assert.ok(JSON.stringify(interrupted.records[0]).length < 16384);
+  await run.finish('failed');
+  const finished = await readRun('bounded', store);
+  assert.equal(finished.last.stage, 'failed');
+  assert.equal(finished.firstFault.message, message);
+});
 
 test('evicting recent events preserves preparation, allocation order and the original fault', async () => {
   let saved;
-  const run = new RunDiagnostics('retained', {}, async value => { saved = structuredClone(value); return true; });
+  const run = snapshotRun('retained', {}, async value => { saved = structuredClone(value); return true; });
   await run.checkpoint({ stage: 'graph-verified', graphSha256: 'graph', expectedInitializerCount: 251 });
   await run.checkpoint({ stage: 'weight-ready', location: 'weights', source: 'opfs-cache' });
   await run.checkpoint({ stage: 'session-create', storage: { cacheHits: 9 } });
@@ -12,7 +99,7 @@ test('evicting recent events preserves preparation, allocation order and the ori
   await run.checkpoint({ stage: 'gpu-error', errorType: 'GPUOutOfMemoryError', message: 'allocation failed' });
   await run.checkpoint({ stage: 'device-lost', message: 'later device loss' });
   await run.finish('failed', { error: 'cleanup error' });
-  assert.equal(saved.schemaVersion, 3);
+  assert.equal(saved.schemaVersion, 4);
   assert.equal(saved.records.length, 64);
   assert.equal(saved.milestones['graph-verified'].expectedInitializerCount, 251);
   assert.equal(saved.milestones['session-create'].storage.cacheHits, 9);
@@ -73,7 +160,7 @@ test('fault/stop summaries retain progress and cache facts after a terminal reco
 
 test('failed persistence does not break later checkpoints, and queued records are snapshots', async () => {
   let saved, calls = 0;
-  const run = new RunDiagnostics('persistence', {}, async value => {
+  const run = snapshotRun('persistence', {}, async value => {
     if (++calls === 1) throw new Error('storage unavailable');
     saved = structuredClone(value); return true;
   });
@@ -110,7 +197,7 @@ test('run journals serialize persistence, isolate IDs and retain a GPU fault aft
     assert.equal(pending, false); pending = true;
     await Promise.resolve(); saved.set(key, structuredClone(state)); pending = false;
   };
-  const run = new RunDiagnostics('one', { browser: 'test' }, persist);
+  const run = snapshotRun('one', { browser: 'test' }, persist);
   await Promise.all(Array.from({ length: 70 }, (_, i) => run.checkpoint({ stage: 'range-read', destinationOffset: i })));
   await run.checkpoint({ stage: 'device-lost', metrics: { deviceLost: { reason: 'unknown' } } });
   await run.checkpoint({ stage: 'gpu-uncaptured-error', message: 'later cleanup error' });
@@ -120,7 +207,7 @@ test('run journals serialize persistence, isolate IDs and retain a GPU fault aft
   assert.equal(record.fault.stage, 'device-lost');
   assert.equal(record.status, 'device-lost');
   assert.equal(record.last.stage, 'device-lost');
-  await new RunDiagnostics('two', {}, persist).checkpoint({ stage: 'load-start' });
+  await snapshotRun('two', {}, persist).checkpoint({ stage: 'load-start' });
   assert.equal(saved.get('run:one').runId, 'one');
   assert.equal(saved.get('run:two').runId, 'two');
 });

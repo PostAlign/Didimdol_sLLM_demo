@@ -26,6 +26,27 @@ let browser;
 const results = [];
 try {
   browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--disable-gpu-sandbox'] });
+  {
+    const page = await browser.newPage();
+    await page.goto(origin);
+    const atomic = await page.evaluate(async () => {
+      const { RunDiagnostics, readRun, saveJournalEntries, readCheckpoint } = await import('/web/sllm/diagnostics.js');
+      const run = new RunDiagnostics('atomic-journal');
+      await run.checkpoint({ stage: 'gpu-wait', phase: 'before-call', destinationOffset: 8 });
+      const key = 'journal:atomic-journal:head', before = await readCheckpoint(key);
+      const success = await saveJournalEntries([[key, { ...before, recordCount: 2 }], ['cannot-clone', () => {}]]);
+      return { success, before, after: await readCheckpoint(key), run: await readRun(run.state.runId) };
+    });
+    assert.equal(atomic.success, false);
+    assert.deepEqual(atomic.after, atomic.before, 'a synchronous put failure must abort earlier writes in the same transaction');
+    assert.equal(atomic.run.last.destinationOffset, 8);
+    await page.reload();
+    const recovered = await page.evaluate(async () => (await import('/web/sllm/diagnostics.js')).readRun('atomic-journal'));
+    assert.equal(recovered.last.phase, 'before-call');
+    assert.equal(recovered.recordCount, 1);
+    results.push({ id: 'atomic-journal-recovery', success: true });
+    await page.close();
+  }
   for (const mode of (process.env.ORT_MODES ?? 'asyncify,jspi,stock').split(',').filter(Boolean)) {
     const page = await browser.newPage();
     page.on('pageerror', error => console.error('pageerror:', error.message));
@@ -62,7 +83,7 @@ try {
       assert.equal(result.metrics.gpuValidatedInitializerCount, 2);
       assert.equal(result.storage.peakOpenHandles, 1);
       assert.equal(result.storage.openHandles, 0);
-      for (const kind of (mode === 'asyncify' ? ['resident', 'runtime', 'resident-opfs'] : ['runtime'])) {
+      for (const kind of (mode === 'asyncify' ? ['resident', 'runtime', 'resident-opfs', 'runtime-resident'] : ['runtime', 'runtime-resident'])) {
         const probePage = await browser.newPage();
         const runtimeRequests = [];
         probePage.on('request', request => { if (/\/web\/vendor\/ort[.-].*\.(mjs|wasm)/.test(request.url())) runtimeRequests.push(request.url()); });
@@ -88,6 +109,21 @@ try {
           assert.equal(probe.metrics.cpuStagingPeak, 4 * 2**20, 'OPFS reads straight into the reusable scratch');
           assert.equal(probe.storage.downloadedFiles, 1, 'the diagnostic generates and verifies its own cold-cache fixture');
           assert.equal(probe.idleAcceptanceCompleted, Number(process.env.TEST_IDLE_SECONDS || 0) >= 120);
+        } else if (kind === 'runtime-resident') {
+          assert.equal(probe.sameDevice, true);
+          assert.equal(probe.runtimeDeviceId, probe.residentDeviceId);
+          assert.equal(probe.gpuLedger.tracking.deviceCount, 1);
+          assert.equal(probe.smallSessionRetained, true);
+          assert.equal(probe.ortWasmInstantiated, true);
+          assert.equal(probe.modelSessionCreated, false);
+          assert.equal(probe.loadedInitializerCount, 2);
+          assert.equal(probe.gpuWeightAllocated, probe.expectedBytes);
+          const categories = Object.fromEntries(probe.gpuLedger.categories.map(item => [item.role, item]));
+          assert.equal(categories.weight.requestedCurrent, probe.expectedBytes);
+          assert.equal(categories['runtime-weight'].requestedCurrent, probe.runtimeMetrics.gpuWeightAllocated);
+          assert.ok(probe.gpuLedger.requestedCurrent >= probe.expectedBytes + probe.runtimeMetrics.gpuWeightAllocated);
+          assert.ok(runtimeRequests.some(url => url.endsWith('.wasm')));
+          assert.equal(probe.storage.openHandles, 0);
         } else {
           assert.equal(probe.gpuWeightAllocated, probe.expectedBytes);
           assert.equal(probe.environment.runtimeMode, null);
@@ -173,6 +209,45 @@ try {
     assert.match(await page.locator('#rows').innerText(), /tokenizer-parse-start · tokenizer.json/);
     assert.deepEqual(modelRequests, [], 'recovery must not restart loading');
     results.push({ id: 'tokenizer-recovery-ui', success: true, completedRunRecovered: true, interruptedParseRecovered: true });
+    // The comparison selector must reach the worker and retain the same schema.
+    await page.locator('#diagnosticsMode').selectOption('snapshot');
+    await page.locator('#start').click();
+    await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
+    const snapshot = await page.evaluate(async () => {
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      const { readRun } = await import('/web/sllm/diagnostics.js');
+      return readRun(state.results.at(-1).runId);
+    });
+    assert.equal(snapshot.persistence.mode, 'snapshot');
+    assert.equal(snapshot.summary.tokenizerPrepared, true);
+    // Cancel while the application worker awaits a file read, then recover the
+    // persisted cancellation. Native-session cleanup has a separate deadline test.
+    let releaseTokenRead;
+    const tokenGate = new Promise(resolve => { releaseTokenRead = resolve; });
+    await page.route('**/tokenizer/tokenizer.json', async route => {
+      await tokenGate;
+      await route.continue().catch(() => {});
+    });
+    await page.locator('#diagnosticsMode').selectOption('compact');
+    await page.locator('#start').click();
+    await page.waitForFunction(() => {
+      try { return JSON.parse(document.getElementById('last').textContent).stage === 'tokenizer-read-start'; }
+      catch { return false; }
+    });
+    await page.locator('#stop').click();
+    await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 10000 });
+    releaseTokenRead();
+    const cancelled = await page.evaluate(async () => {
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      return (await import('/web/sllm/diagnostics.js')).readRun(state.results.at(-1).runId);
+    });
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.cleanup.success, true);
+    await page.reload();
+    const stopResult = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    assert.equal(stopResult.cancelled, true);
+    assert.notEqual(stopResult.interrupted, true);
+    results.push({ id: 'snapshot-and-cooperative-cancel', success: true });
     await page.close();
   }
   if (process.env.TEST_APP_LOAD === '1') {
@@ -253,7 +328,7 @@ try {
     await page.goto(`${origin}/web/sllm/experiments/index.html`);
     const requests = [];
     page.on('request', request => requests.push(request.url()));
-    for (const kind of ['resident-opfs', 'resident-opfs-tokenizer', 'session-only']) {
+    for (const kind of ['resident-opfs', 'resident-opfs-tokenizer', 'runtime-resident', 'session-only']) {
       await page.locator('#kind').selectOption(kind);
       await page.locator('#staging').selectOption('2');
       await page.locator('#repeats').selectOption('1');
@@ -276,6 +351,14 @@ try {
       assert.equal(comparison.stagingMiB, 2);
       assert.equal(comparison.success, true, comparison.error);
       assert.equal(run.status, 'complete');
+      assert.equal(run.cleanup.success, true, JSON.stringify(run.cleanup));
+      assert.equal(run.cleanup.gpuLedger?.requestedCurrent ?? 0, 0);
+      assert.equal(run.persistence.mode, 'compact');
+      if (kind === 'session-only' || kind === 'runtime-resident') {
+        for (const stage of ['ort-wasm-start', 'ort-wasm-complete', 'ort-session-start', 'ort-initializers-start',
+          'ort-initializers-complete', 'ort-kernels-start', 'ort-kernels-complete', 'ort-session-complete']) assert.ok(run.milestones[stage], stage);
+        assert.equal(run.milestones['ort-session-start'].sessionDiagnosticsVersion, 1);
+      }
       assert.equal(run.summary.modelSessionCreated, kind === 'session-only');
       assert.equal(run.summary.tokenizerPrepared, kind === 'resident-opfs-tokenizer');
       assert.equal(run.milestones.ready, undefined, 'a comparison must never announce application readiness');
@@ -284,11 +367,11 @@ try {
       assert.equal(comparison.comparison.storage.cacheHits, 9);
       assert.equal(comparison.comparison.storage.downloadedFiles, 0);
       assert.equal(comparison.execution.ortJavaScriptLoaded, true);
-      assert.equal(comparison.execution.ortWasmInstantiated, kind === 'session-only');
+      assert.equal(comparison.execution.ortWasmInstantiated, ['session-only', 'runtime-resident'].includes(kind));
       assert.equal(comparison.execution.completedScope, { 'resident-opfs': 'gpu-residency',
-        'resident-opfs-tokenizer': 'tokenizer-and-gpu-residency', 'session-only': 'model-session' }[kind]);
+        'resident-opfs-tokenizer': 'tokenizer-and-gpu-residency', 'runtime-resident': 'runtime-and-gpu-residency', 'session-only': 'model-session' }[kind]);
       assert.equal(requests.some(url => url.endsWith('/tokenizer/tokenizer.json')), kind === 'resident-opfs-tokenizer');
-      assert.equal(requests.some(url => url.endsWith('.wasm')), kind === 'session-only');
+      assert.equal(requests.some(url => url.endsWith('.wasm')), ['session-only', 'runtime-resident'].includes(kind));
       if (kind !== 'session-only') assert.equal(requests.some(url => url.includes('huggingface.co')), false);
       await page.evaluate(comparison => {
         const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
@@ -560,7 +643,7 @@ try {
   assert.equal(stopped.environment.idleSeconds, 120);
   assert.match(stopped.environment.build.releaseId, /^[a-f0-9]{64}$/);
   assert.equal(stopped.milestones['runtime-inference-complete'].metrics.gpuWeightUploaded, 10496000);
-  assert.equal(exported.schemaVersion, 3);
+  assert.equal(exported.schemaVersion, 4);
   // The real OPFS comparison needs prepared model files; it must not fetch a
   // gigabyte or treat a generated small fixture as the full model.
   const modelRequests = [];

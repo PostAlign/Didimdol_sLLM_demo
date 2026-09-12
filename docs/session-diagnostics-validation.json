@@ -1,0 +1,192 @@
+{
+  "validatedAt": "2026-09-12T11:50:36.901540+00:00",
+  "releaseId": "b9e9395e50aac44ab625e558f2ae03e666a70f11f18bc4e85ce907c876245f30",
+  "provenance": {
+    "appCommit": "722cd5689cc18299057d07bdfa4d240809450dc7",
+    "appDirty": true,
+    "nodeVersion": "v22.22.1"
+  },
+  "environment": {
+    "browser": "Playwright Chromium / SwiftShader",
+    "physicalIPhoneAvailable": false,
+    "nativeSessionDiagnosticsVersion": 1,
+    "modesTested": [
+      "asyncify",
+      "jspi",
+      "stock (legacy fixture)"
+    ]
+  },
+  "checks": {
+    "nodeTests": {
+      "passed": 50,
+      "failed": 0
+    },
+    "pythonTests": {
+      "passed": 2,
+      "failed": 0
+    },
+    "browserCases": {
+      "passed": 22,
+      "failed": 0,
+      "ids": [
+        "atomic-journal-recovery",
+        "smoke-asyncify",
+        "resident-asyncify",
+        "runtime-asyncify",
+        "resident-opfs-asyncify",
+        "runtime-resident-asyncify",
+        "smoke-jspi",
+        "runtime-jspi",
+        "runtime-resident-jspi",
+        "smoke-stock",
+        "tokenizer-ui",
+        "tokenizer-recovery-ui",
+        "snapshot-and-cooperative-cancel",
+        "app-from-pretrained",
+        "comparison-resident-opfs",
+        "comparison-resident-opfs-tokenizer",
+        "comparison-runtime-resident",
+        "comparison-session-only",
+        "Gemma-FP32-8MiB",
+        "gpu-tracking-browser",
+        "resident-corruption",
+        "diagnostic-ui"
+      ]
+    },
+    "releaseVerifiedAssets": 67
+  },
+  "comparisons": [
+    {
+      "kind": "resident-opfs",
+      "success": true,
+      "requestedRuns": 1,
+      "stagingMiB": 2,
+      "loadedInitializerCount": 251,
+      "uploadedBytes": 1072392704,
+      "cacheHits": 9,
+      "downloadedFiles": 0,
+      "persistence": {
+        "mode": "compact",
+        "completed": 3561,
+        "failures": 0
+      },
+      "cleanupSucceeded": true
+    },
+    {
+      "kind": "resident-opfs-tokenizer",
+      "success": true,
+      "requestedRuns": 1,
+      "stagingMiB": 2,
+      "loadedInitializerCount": 251,
+      "uploadedBytes": 1072392704,
+      "cacheHits": 9,
+      "downloadedFiles": 0,
+      "persistence": {
+        "mode": "compact",
+        "completed": 3577,
+        "failures": 0
+      },
+      "cleanupSucceeded": true
+    },
+    {
+      "kind": "runtime-resident",
+      "success": true,
+      "requestedRuns": 1,
+      "stagingMiB": 2,
+      "loadedInitializerCount": 251,
+      "uploadedBytes": 1072392704,
+      "cacheHits": 9,
+      "downloadedFiles": 0,
+      "persistence": {
+        "mode": "compact",
+        "completed": 3611,
+        "failures": 0
+      },
+      "cleanupSucceeded": true,
+      "sameDevice": true,
+      "runtimeDeviceId": 1,
+      "residentDeviceId": 1,
+      "runtimeWeightBytes": 10496000,
+      "totalGpuRequestedBytes": 1082926208
+    },
+    {
+      "kind": "session-only",
+      "success": true,
+      "requestedRuns": 1,
+      "stagingMiB": 2,
+      "loadedInitializerCount": 251,
+      "uploadedBytes": 1072392704,
+      "cacheHits": 9,
+      "downloadedFiles": 0,
+      "persistence": {
+        "mode": "compact",
+        "completed": 3586,
+        "failures": 0
+      },
+      "cleanupSucceeded": true
+    }
+  ],
+  "appInference": {
+    "success": true,
+    "loadedInitializerCount": 251,
+    "stagingMiB": 2,
+    "outputs": [
+      {
+        "row": 3,
+        "promptLen": 35,
+        "durationMs": 13143.699999988079,
+        "tokens": [
+          238789,
+          236764
+        ]
+      },
+      {
+        "row": 95,
+        "promptLen": 266,
+        "durationMs": 29815.90000000596,
+        "tokens": [
+          238789,
+          236764
+        ]
+      }
+    ],
+    "cleanupSucceeded": true
+  },
+  "nativeSessionPhases": [
+    "ort-wasm-start",
+    "ort-wasm-complete",
+    "ort-environment-start",
+    "ort-environment-complete",
+    "ort-session-start",
+    "ort-plan-start",
+    "ort-initializers-start",
+    "ort-initializers-complete",
+    "ort-kernels-start",
+    "ort-kernels-complete",
+    "ort-prepacking-start",
+    "ort-prepacking-complete",
+    "ort-session-complete"
+  ],
+  "sessionCreationProgramCalls": {
+    "shaderModules": 0,
+    "computePipelines": 0,
+    "asyncPipelinesStarted": 0,
+    "asyncPipelinesCompleted": 0,
+    "asyncPipelinesFailed": 0,
+    "coverage": "complete",
+    "reasons": []
+  },
+  "scope": {
+    "fullPhoneAcceptance": false,
+    "full100RowEvaluationsRun": false,
+    "runtimeIdleSecondsInLocalSuite": 0,
+    "notes": [
+      "Full-model short and long prompts generate two greedy tokens and match the recorded FP32 baseline.",
+      "The new combined probe verifies every word of all 251 production initializers while retaining the small session on one GPUDevice.",
+      "Journal tests cover transaction abort, durable latest position, failed-write retry, bounded history, and schema 2/3 compatibility.",
+      "Within the synthetic persistence unit test, compact serialized writes are less than one fifth of snapshot writes; this is not RSS or phone performance.",
+      "The local full session made zero observed shader/pipeline creation calls during session creation. This does not establish the iPhone termination cause.",
+      "Three phone session/application loads, five cached loads, short/long inference and two 100-row evaluations remain required."
+    ]
+  }
+}

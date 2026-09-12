@@ -38,6 +38,37 @@ export async function readCheckpoint(key = 'last') {
   } catch { return null; }
 }
 
+// One transaction commits the latest event and its sequence together. A page
+// interruption cannot expose a new head with an older event in the ring.
+export async function saveJournalEntries(entries) {
+  try {
+    const db = await database();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.oncomplete = resolve;
+      tx.onerror = tx.onabort = () => reject(tx.error);
+      try { for (const [key, value] of entries) tx.objectStore(STORE).put(value, key); }
+      catch (error) { tx.abort(); reject(error); }
+    });
+    return true;
+  } catch {
+    if (!warned) console.warn('Diagnostic persistence unavailable: journal transaction failed');
+    warned = true;
+    return false;
+  }
+}
+const journalPrefix = runId => `journal:${runId}:`;
+async function readJournalEntries(runId) {
+  try {
+    const db = await database(), prefix = journalPrefix(runId);
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(STORE).objectStore(STORE).getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } catch { return null; }
+}
+
 export const newRunId = () => crypto.randomUUID();
 export const runKey = runId => `run:${runId}`;
 const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-verified', 'weights-prepared',
@@ -90,7 +121,7 @@ export function diagnosticSummary(run, sessionFallback = null) {
   const storage = last.storage ?? session?.storage
     ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
     ?? run.milestones?.['weights-prepared']?.storage ?? null;
-  return { effectiveStatus: fault ? 'failed' : interrupted ? 'interrupted' : run.status,
+  return { effectiveStatus: fault || run.cleanup?.success === false || run.cleanupError ? 'failed' : interrupted ? 'interrupted' : run.status,
     file: fault?.file ?? last.file ?? null, observedDuring: fault?.observedDuring ?? last.observedDuring ?? null,
     loadOrder: run.environment?.loadOrder ?? session?.loadOrder ?? null,
     tokenizer: run.summary?.tokenizer ?? session?.tokenizer ?? run.milestones?.['tokenizer-ready'] ?? null,
@@ -107,7 +138,11 @@ export function diagnosticSummary(run, sessionFallback = null) {
     gpuValidatedInitializerCount: metrics.gpuValidatedInitializerCount ?? run.summary?.gpuValidatedInitializerCount ?? null,
     trackingStatus, storage,
     gpuRequestedCurrent: trackingStatus === 'complete' ? ledger.requestedCurrent ?? null : null,
-    wasmHeapBytes: metrics.wasmHeapBytes ?? null,
+    wasmHeapBytes: metrics.wasmHeapBytes || last.runtimeMetrics?.wasmHeapBytes || run.summary?.runtimeMetrics?.wasmHeapBytes || null,
+    gpuCategories: ledger?.categories ?? null, gpuPrograms: ledger?.programs ?? null,
+    cleanup: run.cleanup ?? null, persistence: run.persistence ?? null,
+    ortPhases: Object.values(run.milestones || {}).filter(record => record.stage?.startsWith('ort-'))
+      .map(({ stage, elapsedMs, sessionDiagnosticsVersion }) => ({ stage, elapsedMs, sessionDiagnosticsVersion })),
     timings: run.summary?.sessionMetrics?.timings ?? run.summary?.timings
       ?? session?.timings ?? run.milestones?.['session-create']?.timings ?? null,
     releaseId: run.environment?.build?.releaseId ?? null };
@@ -123,14 +158,29 @@ export async function recordRecovery(run, context = {}) {
   return recovery;
 }
 
+const MAX_HISTORY_CHARACTERS = 16384;
+function historyRecord(value) {
+  // Bound both the number and size of recent records. The full latest record,
+  // faults, milestones and terminal summary are persisted separately if large.
+  if (JSON.stringify(value).length <= MAX_HISTORY_CHARACTERS) return value;
+  return { stage: String(value.stage).slice(0, 160), runId: value.runId, timestamp: value.timestamp,
+    elapsedMs: value.elapsedMs, initializerName: String(value.initializerName || '').slice(0, 1024),
+    phase: value.phase, destinationOffset: value.destinationOffset, historyTruncated: true };
+}
+
 /** Serialize durable checkpoints; keep a bounded history without tensors or prompts. */
 export class RunDiagnostics {
-  constructor(runId = newRunId(), environment = {}, persist = saveCheckpoint) {
+  constructor(runId = newRunId(), environment = {}, persist = saveCheckpoint, { persistBatch = saveJournalEntries } = {}) {
     this.persist = persist;
-    this.state = { schemaVersion: 3, runId, startedAt: Date.now(), status: 'running', environment,
+    this.persistBatch = persistBatch;
+    this.mode = environment.diagnosticsMode || 'compact';
+    if (!['compact', 'snapshot'].includes(this.mode)) throw new Error('Invalid diagnostics mode');
+    this.headerSaved = false;
+    this.dirty = new Map();
+    this.state = { schemaVersion: 4, runId, startedAt: Date.now(), status: 'running', environment,
       records: [], last: null, fault: null, firstFault: null, summary: null,
       milestones: {}, files: {}, preparation: {}, initializerOrder: [], droppedInitializers: 0, recordCount: 0,
-      persistence: { completed: 0, failures: 0, totalMs: 0, peakMs: 0,
+      persistence: { mode: this.mode, completed: 0, failures: 0, totalMs: 0, peakMs: 0, entriesWritten: 0,
         note: 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings.' },
       memoryNote: 'Allocation counters and WASM capacity are not process RSS or driver memory.' };
     this.pending = Promise.resolve();
@@ -144,7 +194,7 @@ export class RunDiagnostics {
       if (FAULTS.has(value.stage) && !this.state.firstFault) this.state.firstFault = value;
       if (value.stage === 'device-lost' || (!this.state.fault && ['worker-error', 'gpu-uncaptured-error'].includes(value.stage))) this.state.fault = value;
       if (!this.state.fault && FAULTS.has(value.stage)) this.state.fault = value;
-      if (MILESTONES.has(value.stage)) this.state.milestones[value.stage] = value;
+      if (MILESTONES.has(value.stage) || value.stage.startsWith('ort-')) this.state.milestones[value.stage] = value;
       if (isPreparation(value.stage)) {
         this.state.milestones[value.stage] = value;
         const file = value.file || 'shared';
@@ -161,13 +211,40 @@ export class RunDiagnostics {
       }
       this.state.recordCount++;
       this.state.last = value;
-      this.state.records.push(value);
+      const history = historyRecord(value);
+      this.state.records.push(history);
       if (this.state.records.length > 64) this.state.records.shift();
       this.state.updatedAt = value.timestamp;
+      // Metadata deltas survive a failed transaction and are retried with the
+      // next event. The history is a 64-slot ring; initializer metadata is capped.
+      const delta = (key, kind, data) => this.dirty.set(key, { kind, ...data });
+      if (this.state.milestones[value.stage] === value) delta(`milestone:${value.stage}`, 'milestone', { name: value.stage, value });
+      if (isPreparation(value.stage)) delta(`preparation:${value.file || 'shared'}:${value.stage}`, 'preparation', { file: value.file || 'shared', name: value.stage, value });
+      if (value.location && this.state.files[value.location] === value) delta(`file:${value.location}`, 'file', { name: value.location, value });
+      const initIndex = this.state.initializerOrder.length - 1;
+      const initializer = this.state.initializerOrder[initIndex];
+      if (initializer?.timestamp === value.timestamp && ['allocate-initializer', 'resident-allocate'].includes(value.stage)) {
+        delta(`initializer:${initIndex}`, 'initializer', { index: initIndex, value: initializer });
+      }
+      if (this.state.fault === value || this.state.firstFault === value) delta('faults', 'faults', { fault: this.state.fault, firstFault: this.state.firstFault });
+      delta('head', 'head', { ...(history !== value ? { last: value } : {}), status: this.state.status, updatedAt: value.timestamp, recordCount: this.state.recordCount,
+        droppedInitializers: this.state.droppedInitializers, persistence: { ...this.state.persistence } });
+      delta(`event:${this.state.recordCount % 64}`, 'event', { sequence: this.state.recordCount, value: history });
+      const prefix = journalPrefix(this.state.runId);
+      const entries = [...this.dirty].map(([key, entry]) => [prefix + key, entry]);
+      if (!this.headerSaved) entries.unshift([runKey(this.state.runId), {
+        schemaVersion: 4, storageFormat: 'incremental-v1', runId: this.state.runId, startedAt: this.state.startedAt,
+        environment: this.state.environment, memoryNote: this.state.memoryNote,
+      }]);
       const start = performance.now();
       let saved;
-      try { saved = await this.persist(this.state, runKey(this.state.runId)); }
+      try { saved = this.mode === 'snapshot' ? await this.persist(this.state, runKey(this.state.runId)) : await this.persistBatch(entries); }
       catch { saved = false; }
+      if (saved !== false) {
+        this.headerSaved = true;
+        this.state.persistence.entriesWritten += this.mode === 'snapshot' ? 1 : entries.length;
+        this.dirty.clear();
+      }
       const ms = performance.now() - start;
       this.state.persistence.completed++;
       if (saved === false) this.state.persistence.failures++;
@@ -182,14 +259,44 @@ export class RunDiagnostics {
     this.state.status = this.state.fault?.stage === 'device-lost' ? 'device-lost'
       : this.state.fault && ['ready', 'complete'].includes(status) ? 'failed' : status;
     this.state.summary = summary;
-    return this.checkpoint({ ...summary, stage: this.state.status });
+    this.dirty.set('summary', { kind: 'summary', value: summary });
+    return this.checkpoint({ stage: this.state.status });
   }
 }
 
-export async function readRun(runId) {
-  const value = runId ? await readCheckpoint(runKey(runId)) : null;
-  if (value?.runId !== runId) return null;
-  // Schema 2 remains readable; missing counters are unknown, never fabricated zeros.
-  const recovery = await readCheckpoint(`recovery:${runId}`);
-  return { ...value, ...(recovery ? { recovery } : {}) };
+/** Reconstruct schema 4 exports; schema 2/3 and snapshot journals stay readable. */
+export async function readRun(runId, options = {}) {
+  const { read = readCheckpoint, readEntries = readJournalEntries } = options && typeof options === 'object' ? options : {};
+  let value = runId ? await read(runKey(runId)) : null;
+  if (!value || value.runId !== runId) return null;
+  if (value.storageFormat === 'incremental-v1') {
+    const entries = await readEntries(runId);
+    if (!entries) return null;
+    const head = entries.find(entry => entry.kind === 'head');
+    if (!head) return null;
+    const { storageFormat, ...header } = value;
+    const { kind, ...state } = head;
+    value = { ...header, ...state, records: [], last: null, summary: null, fault: null, firstFault: null,
+      milestones: {}, files: {}, preparation: {}, initializerOrder: [] };
+    const events = [];
+    for (const entry of entries) {
+      if (entry.kind === 'event' && entry.sequence <= head.recordCount && entry.sequence > head.recordCount - 64) events.push(entry);
+      if (entry.kind === 'milestone') value.milestones[entry.name] = entry.value;
+      if (entry.kind === 'file') value.files[entry.name] = entry.value;
+      if (entry.kind === 'preparation') {
+        value.preparation[entry.file] ||= {};
+        value.preparation[entry.file][entry.name] = entry.value;
+      }
+      if (entry.kind === 'initializer') value.initializerOrder[entry.index] = entry.value;
+      if (entry.kind === 'summary') value.summary = entry.value;
+      if (entry.kind === 'faults') { value.fault = entry.fault; value.firstFault = entry.firstFault; }
+    }
+    events.sort((a, b) => a.sequence - b.sequence);
+    value.records = events.map(entry => entry.value);
+    value.last = head.last ?? events.find(entry => entry.sequence === head.recordCount)?.value ?? null;
+    value.initializerOrder = value.initializerOrder.filter(Boolean);
+  }
+  const recovery = await read(`recovery:${runId}`);
+  const cleanup = await read(`cleanup:${runId}`);
+  return { ...value, ...(recovery ? { recovery } : {}), ...(cleanup ? { cleanup } : {}) };
 }

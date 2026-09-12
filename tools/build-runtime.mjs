@@ -20,6 +20,7 @@ const artifacts = path.resolve(process.env.ORT_ARTIFACTS || path.join(root, `.wo
 // Require matching patched binaries; never quietly serve stock WASM with custom JS.
 const glue = await readFile(path.join(artifacts, `${sourceArtifact}.mjs`), 'utf8');
 if (!/ortRangeLoaderVersion["']?\]?\s*=\s*2/.test(glue)) throw new Error('WASM factory requires range-loader ABI 2');
+if (!/ortSessionDiagnosticsVersion["']?\]?\s*=\s*1/.test(glue)) throw new Error('Rebuild WASM with session lifecycle diagnostics v1');
 // Stable public filenames; wasmPaths explicitly selects the matching binary.
 for (const ext of ['mjs', 'wasm']) await cp(path.join(artifacts, `${sourceArtifact}.${ext}`), path.join(output, `${artifact}.${ext}`));
 const define = Object.fromEntries(Object.entries({
@@ -63,7 +64,7 @@ let nativeBuild = null;
 try { nativeBuild = JSON.parse(await readFile(path.join(artifacts, 'didimdol-build.json'), 'utf8')); } catch {}
 let builds = {};
 try { builds = JSON.parse(await readFile(path.join(output, 'build.json'), 'utf8')).builds || {}; } catch {}
-builds[mode] = { profile, threads, sourceArtifact, ortCommit: git(ortRoot, 'rev-parse', 'HEAD'), nativeBuild,
+builds[mode] = { sessionDiagnosticsVersion: 1, profile, threads, sourceArtifact, ortCommit: git(ortRoot, 'rev-parse', 'HEAD'), nativeBuild,
   wasmBytes: (await readFile(path.join(output, `${artifact}.wasm`))).byteLength,
   wasmSha256: sha(await readFile(path.join(output, `${artifact}.wasm`))),
   patchSha256: sha(await readFile(path.join(root, 'patches/ort-session-range-loader.patch'))),
