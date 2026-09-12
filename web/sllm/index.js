@@ -219,7 +219,7 @@ export function initSllm(root) {
       `이전 실행 중단 — ${run?.fault ? '오류 기록 있음' : '원인 미확인'}. 지난 ${prev.phase === 'run' ? '평가' : '로딩'}(${when} 시작)가 도중에 끝났습니다. `
       + '페이지 이동·새로고침 또는 브라우저/GPU 종료 가능성이 있으며, 메모리 부족은 아직 확인되지 않았습니다. '
       + '검증·저장이 완료된 가중치 파일은 다시 사용합니다. 진단 기록을 저장해 주세요.'
-      + (checkpoint ? ` 마지막 기록: ${checkpoint.stage} · ${checkpoint.initializerName || ''}` : '')
+      + (checkpoint ? ` 마지막 기록: ${summary?.observedDuring || checkpoint.stage} · ${summary?.file || checkpoint.initializerName || ''}` : '')
       + (summary?.gpuWeightAllocated != null ? ` · GPU 가중치 ${mb(summary.gpuWeightAllocated)} · ${summary.loadedInitializerCount ?? '?'}개 완료` : '')
       + (summary ? ` · GPU 계측 ${trackingLabel(summary.trackingStatus)}` : '')
       + (checkpoint?.stage === 'gpu-wait' ? ' · GPU 완료 대기 직전까지 기록됨' : ''));

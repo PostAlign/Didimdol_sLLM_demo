@@ -23,6 +23,7 @@ export function executionEvidence(result, run = null) {
   let completedScope = null;
   if (result.success && !run?.fault) {
     if (isResident(kind) && summary.allBytesUsed) completedScope = 'gpu-residency';
+    else if (kind === 'tokenizer' && summary.tokenizerPrepared && summary.modelSessionCreated === false) completedScope = 'tokenizer-preparation';
     else if (kind === 'runtime' && (summary.inferenceVerified || run?.milestones?.['runtime-inference-complete'])) {
       completedScope = idleAcceptanceCompleted ? 'small-runtime-and-idle' : 'small-runtime-inference';
     } else if (['load', 'warm-load'].includes(kind)) completedScope = 'model-load';
@@ -30,12 +31,15 @@ export function executionEvidence(result, run = null) {
     else if (kind === 'evaluation') completedScope = 'two-evaluations';
   }
   return { runtimeMode: isResident(kind) ? null : environment.runtimeMode ?? result.mode ?? null,
+    loadOrder: environment.loadOrder ?? summary.tokenizer?.loadOrder ?? null,
+    tokenizerBuild: environment.build?.tokenizer ?? summary.tokenizer?.tokenizerBuild ?? null,
     inputSource: summary.inputSource ?? executionSettings(kind).inputSource,
     verification: summary.verification ?? null, allocationOrder: summary.allocationOrder ?? null,
     idleRequestedSeconds, idleElapsedMs, idleAcceptanceCompleted, completedScope };
 }
 
 export const scopeLabel = scope => ({ 'gpu-residency': 'GPU 상주 검증 완료',
+  'tokenizer-preparation': '토크나이저 준비 완료',
   'small-runtime-and-idle': '작은 모델 추론·120초 관찰 완료', 'small-runtime-inference': '작은 모델 추론 완료',
   'model-load': '모델 로딩 완료', 'short-long-inference': '짧은·긴 입력 추론 완료',
   'two-evaluations': '100건 평가 2회 완료' }[scope] || '성공');

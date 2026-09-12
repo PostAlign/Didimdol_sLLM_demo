@@ -4,9 +4,64 @@ Target: iPhone 14 Pro Max, iOS 26, Chrome for iOS. FP32 weights, model revision,
 100 evaluation rows, prompt template, sampling settings and the 512-token limit remain the same.
 This change has local browser tests; iPhone success must be established on the actual device.
 
+## Tokenizer preparation and September 12 restart investigation
+
+The two iPhone full-load records reached `session-create-complete`, with all 251
+external initializers uploaded and validated, then stopped at `tokenizer-load`.
+This locates the interruption after session creation; it does not establish an
+OS-memory termination. The current path prepares the tokenizer before model GPU
+allocation so tokenizer construction does not overlap with the full weight set.
+Its retained vocabulary still consumes memory alongside the finished model.
+Dropping temporary references does not force browser garbage collection.
+
+`web/sllm/tokenizer-loader.js` reads the two JSON files sequentially from immutable
+release URLs. It uses normal HTTP caching, without cloning responses or adding a
+second Cache Storage copy. Read, UTF-8 decode, JSON parse and constructor start/end
+markers are persisted before the next operation. Configuration and tokenizer file
+records remain under `preparation` after the 64-entry recent-event history rolls
+over. Template and evaluation-data preparation have separate stages. The expected
+asset SHA-256 is release metadata, not a claimed runtime rehash; loaded byte sizes
+are checked. `jsMemory` is `null` where `performance.memory` is unavailable, and
+even supported JS-heap samples are not total browser/process RSS.
+
+`tools/tokenizer-patch.mjs` checks the exact tokenizers 0.1.3 and transformers 4.2.0
+source hashes and patches the browser bundle in memory. BPE/vocabulary Maps are
+filled incrementally without creating complete arrays of key/value pairs. Merge
+keys, insertion order, tokenizer class selection and retained source configuration
+are preserved. The patch also exposes upstream class selection as `from_json` so
+the application can instrument file parsing separately. The patch identity is
+included in release hashes and diagnostics. `node_modules` is not modified.
+
+Experiment **2b. 토크나이저 준비만 확인** calls the same loader through the application
+worker and reports only tokenizer preparation success. It imports the application
+and ORT JavaScript but never creates a model session or instantiates ORT WASM.
+The effective vocabulary has 262,145 slots: 262,144 base entries plus the added
+`<image_soft_token>` at ID 262144. There are 514,906 BPE merge rules.
+
+Validation commands:
+
+```bash
+npm test
+npm run build
+npm run verify:release
+node tools/measure-tokenizer.mjs > .work/tokenizer-memory.json
+TEST_APP_LOAD=1 npm run test:browser
+```
+
+The Node memory comparison runs baseline and patched BPE implementations three
+times each in fresh processes, using the same new preparation loader. It isolates
+the BPE change, not the effect of reordering GPU allocation. Browser tests compare
+the tokenizer diagnostic and full app load/probe, including recorded FP32 token
+outputs. `docs/tokenizer-validation.json` records local results. On the phone,
+run tokenizer preparation, full load three times, five cached loads, short/long
+inference, then two 100-row evaluations in that order. A new interruption should
+be compared with same-time WebContent/GPU or Jetsam device records; a successful
+desktop check is not iPhone memory acceptance.
+
 ## Loading path
 
-1. Fetch the small ONNX graph and match its SHA-256 to `model/initializers.json`.
+1. Prepare the tokenizer, chat template and evaluation data before creating any model GPU buffers.
+   Then fetch the small ONNX graph and match its SHA-256 to `model/initializers.json`.
 2. Download each external file sequentially into OPFS. A legacy Cache Storage response is
    streamed into OPFS when available; it is removed only after successful verification.
 3. Validate exact file size and SHA-256 for each 8 MiB block. Flush the data, close its
@@ -17,7 +72,7 @@ This change has local browser tests; iPhone success must be established on the a
 5. Read OPFS directly into a reusable 8 MiB JS scratch, upload to ORT's GPU buffer,
    and await the GPU queue before reusing the scratch. Only one OPFS read handle is open.
 6. Seal the source after session creation. Subsequent inference must not read external weights.
-7. Load the tokenizer after session creation and source cleanup, reducing overlap with loading.
+7. Report `ready` only after both tokenizer preparation and session creation have completed.
 
 The OPFS verification marker trusts an already verified, unchanged local file with matching
 size and metadata. It is not a fresh rehash on every visit. The original model bytes are unchanged.
@@ -177,6 +232,7 @@ Open `web/sllm/experiments/` on the actual phone, enter the complete OS/browser 
 | GPU residency | No ORT import. Fill buffers matching all external weights and checksum every word, keeping every buffer alive until completion. |
 | Stored-weight GPU residency | No ORT import. Read the verified OPFS model files and retain all weight buffers. Requires files already prepared by a full-load attempt. |
 | Small runtime | Execute the 10 MiB FP32 model twice, then wait 120 seconds to expose delayed compilation/resource growth. |
+| Tokenizer preparation | Same application worker and tokenizer loader, without a model session or weight requests. Imports application/ORT JavaScript; does not instantiate the ORT WASM runtime. |
 | Full load | Actual app/from_pretrained path with verified OPFS weights. |
 | Five cached loads | Five fresh pages/workers reusing completed files. Run after the first full load. |
 | Short inference | Actual shortest (35 tokens) and longest (266 tokens) evaluation inputs, up to 32 greedy tokens each. |
@@ -304,8 +360,8 @@ OPFS store's completed range-read count, bytes, total/peak read duration and act
 file/handle state. Read time includes acquiring a new file handle when needed,
 and excludes diagnostic persistence and file preparation/hash verification. A
 completed session reports closed handles; an interrupted upload retains its most
-recent storage snapshot. Full-load results also record graph preparation (including
-preceding cache cleanup), weight preparation, the `from_pretrained` call, tokenizer
+recent storage snapshot. Full-load results also record graph preparation, weight
+preparation, the `from_pretrained` call, tokenizer and evaluation-input
 preparation and total load durations. These phase durations include awaited
 checkpoints; GPU/read operation timers and `persistence` remain separate. Complete
 GPU tracking permits reporting total requested GPU bytes alongside weight bytes;

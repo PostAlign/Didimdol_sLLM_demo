@@ -19,6 +19,7 @@ function updateControls() {
   if (!state.active) {
     $('mode').disabled = isResident($('kind').value);
     $('repeats').disabled = $('kind').value !== 'load';
+    $('staging').disabled = $('kind').value === 'tokenizer';
   }
 }
 $('kind').addEventListener('change', updateControls);
@@ -31,11 +32,12 @@ function render() {
     const group = series.find(group => group.seriesId === (result.seriesId || result.runIds?.[0] || result.runId));
     const mib = value => value == null ? '—' : (value / 2**20).toFixed(2);
     const cache = storage ? `${storage.cacheHits}/${storage.totalFiles} · 이전 ${storage.migratedFiles} · 다운로드 ${storage.downloadedFiles}` : '—';
-    const location = [comparison.faultStage || comparison.stage, comparison.initializerName,
+    const location = [comparison.observedDuring || comparison.faultStage || comparison.stage, comparison.file, comparison.initializerName,
       comparison.destinationOffset == null ? null : `${mib(comparison.destinationOffset)} MiB 위치`].filter(Boolean).join(' · ') || '—';
     const idle = execution.idleRequestedSeconds === 0 ? '대기 없음'
       : `${execution.idleElapsedMs == null ? '미기록' : (execution.idleElapsedMs / 1000).toFixed(1)} / ${execution.idleRequestedSeconds ?? '?'}초`;
-    for (const value of [`${result.kind} · ${result.stagingMiB ?? '?'} MiB · ${isResident(result.kind) ? 'ORT 사용 안 함' : execution.runtimeMode || '미기록'}`,
+    const setting = result.kind === 'tokenizer' ? '모델 세션 없음' : `${result.stagingMiB ?? '?'} MiB`;
+    for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 사용 안 함' : execution.runtimeMode || '미기록'}`,
       result.interrupted ? '중단 (원인 미확인)' : result.success ? scopeLabel(execution.completedScope) : result.cancelled ? '사용자 중단' : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
@@ -56,6 +58,7 @@ if (state.active) {
   const kind = state.active.kind;
   const storage = diagnostic?.summary?.storage;
   const success = !diagnostic?.fault && ((kind === 'load' && diagnostic?.status === 'ready') ||
+    (kind === 'tokenizer' && diagnostic?.status === 'complete' && diagnostic.summary?.tokenizerPrepared && diagnostic.summary?.modelSessionCreated === false) ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && storage?.totalFiles > 0 && storage.cacheHits === storage.totalFiles) ||
     ((isSimpleProbe(kind) || kind === 'probe') && diagnostic?.status === 'complete') ||
     (kind === 'evaluation' && state.active.evaluations?.length === 2 && state.active.evaluations.every(value => value.failed === 0)));
@@ -128,6 +131,7 @@ async function begin(config) {
   config.requestedRuns ??= config.remaining || 1;
   config.attemptNumber ??= 1;
   if (isResident(config.kind)) config.mode = null;
+  if (config.kind === 'tokenizer') config.stagingMiB = null;
   state.kind = config.kind; $('kind').value = config.kind;
   const runId = newRunId();
   state.active = { ...config, runId, runIds: [runId], startedAt: Date.now() }; save();
@@ -171,10 +175,12 @@ async function begin(config) {
   };
   worker.onmessage = async ({ data }) => {
     if (!state.active) return;
-    if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
+    if (data.type === 'worker-ready') worker.postMessage({ type: config.kind === 'tokenizer' ? 'tokenizer' : 'load',
+      device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
+    if (data.type === 'preparation') $('last').textContent = JSON.stringify(data.record, null, 2);
     if (data.type === 'phase') $('status').textContent = data.text;
     if (data.type === 'progress') { $('status').textContent = data.record.stage; $('last').textContent = JSON.stringify(data.record, null, 2); }
-    if (data.type === 'dl') $('status').textContent = `모델 준비 ${Math.round((data.loaded || 0) / 2**20)} MiB`;
+    if (data.type === 'dl') $('status').textContent = `${data.which === 'tok' ? '토크나이저' : '모델'} 준비 ${Math.round((data.loaded || 0) / 2**20)} MiB`;
     if (data.type === 'diagnostic') {
       $('last').textContent = JSON.stringify(data.record, null, 2);
       if (data.record.stage === 'device-lost') await finish({ success: false, error: 'GPU device lost' });

@@ -3,10 +3,12 @@ import { mkdir, cp, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { git, packageRelease } from './release.mjs';
+import { tokenizerPatch } from './tokenizer-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const ortRoot = path.resolve(process.env.ORT_SOURCE || path.join(root, '.work/onnxruntime'));
 const output = path.join(root, 'web/vendor');
+const tokenizer = await tokenizerPatch(root);
 await mkdir(output, { recursive: true });
 const mode = process.env.ORT_MODE || 'asyncify';
 const profile = process.env.ORT_PROFILE || 'mobile';
@@ -39,7 +41,7 @@ await build({
   entryPoints: [path.join(root, 'node_modules/@huggingface/transformers/src/transformers.js')],
   outfile: path.join(output, 'transformers.mjs'), bundle: true, format: 'esm', platform: 'browser',
   target: 'es2022', minify: true, external: ['onnxruntime-web/webgpu', 'onnxruntime-common'],
-  plugins: [{ name: 'browser-only', setup(builder) {
+  plugins: [tokenizer.plugin, { name: 'browser-only', setup(builder) {
     builder.onResolve({ filter: /^(onnxruntime-node|sharp|node:.*)$/ }, args => ({ path: args.path, namespace: 'empty-node' }));
     builder.onLoad({ filter: /.*/, namespace: 'empty-node' }, () => ({ contents: 'module.exports = {};', loader: 'js' }));
   } }],
@@ -67,6 +69,7 @@ builds[mode] = { profile, threads, sourceArtifact, ortCommit: git(ortRoot, 'rev-
   patchSha256: sha(await readFile(path.join(root, 'patches/ort-session-range-loader.patch'))),
   operatorsSha256: profile === 'mobile' ? sha(await readFile(path.join(root, 'model/required-operators.config'))) : null };
 const runtimeBuild = {
+  tokenizer: tokenizer.metadata,
   ortVersion: '1.26.0-dev.20260416-b7804b056c', transformersVersion: '4.2.0', rangeLoaderVersion: 2,
   modes: Object.keys(builds), builds,
 };

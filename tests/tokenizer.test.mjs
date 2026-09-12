@@ -1,0 +1,121 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
+import { GemmaTokenizer } from '@huggingface/transformers';
+import { tokenizerPatch, patchTokenizerSource } from '../tools/tokenizer-patch.mjs';
+import { prepareTokenizer, readPreparationFile, jsMemory } from '../web/sllm/tokenizer-loader.js';
+import { RunDiagnostics, diagnosticSummary, recoveryEvidence } from '../web/sllm/diagnostics.js';
+
+const root = path.resolve(import.meta.dirname, '..');
+
+test('patched class selection, tokens, decoding and chat templates match upstream on all evaluation rows', async t => {
+  await mkdir(path.join(root, '.work'), { recursive: true });
+  const directory = await mkdtemp(path.join(root, '.work/tokenizer-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const patch = await tokenizerPatch(root);
+  const outfile = path.join(directory, 'auto.mjs');
+  await build({ entryPoints: [path.join(root, 'node_modules/@huggingface/transformers/src/models/auto/tokenization_auto.js')],
+    outfile, bundle: true, format: 'esm', platform: 'node', plugins: [patch.plugin],
+    external: ['onnxruntime-node', 'onnxruntime-web/webgpu', 'onnxruntime-common', 'sharp'] });
+  const { AutoTokenizer } = await import(pathToFileURL(outfile));
+  const data = JSON.parse(await readFile(path.join(root, 'tokenizer/tokenizer.json'), 'utf8'));
+  const config = JSON.parse(await readFile(path.join(root, 'tokenizer/tokenizer_config.json'), 'utf8'));
+  const baseline = new GemmaTokenizer(data, config);
+  const patched = AutoTokenizer.from_json(data, config);
+  assert.equal(patched.constructor.name, 'GemmaTokenizer');
+  assert.equal(AutoTokenizer.from_json(data, { ...config, tokenizer_class: 'GemmaTokenizerFast' }).constructor.name, 'GemmaTokenizer');
+  assert.deepEqual(patched.all_special_ids, baseline.all_special_ids);
+  assert.deepEqual(patched.all_special_tokens, baseline.all_special_tokens);
+  const rows = (await readFile(path.join(root, 'web/sllm/data.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const chat_template = await readFile(path.join(root, 'tokenizer/chat_template.jinja'), 'utf8');
+  const examples = ['', '안녕하세요. 한글과 English 123', '  공백\t\n\n유지  ', '😀 👩‍💻 e\u0301 가나다',
+    '<bos><start_of_turn>user\n질문<end_of_turn>\n', ...rows.flatMap(row => row.messages.map(message => message.content))];
+  for (const text of examples) {
+    const expected = baseline.encode(text), actual = patched.encode(text);
+    assert.deepEqual(actual, expected, text.slice(0, 60));
+    assert.equal(patched.decode(actual), baseline.decode(expected));
+    assert.equal(patched.decode(actual, { skip_special_tokens: true }), baseline.decode(expected, { skip_special_tokens: true }));
+  }
+  for (const row of rows) {
+    const messages = row.messages.slice(0, -1);
+    const options = { chat_template, add_generation_prompt: true, return_dict: true };
+    const expected = baseline.apply_chat_template(messages, options);
+    const actual = patched.apply_chat_template(messages, options);
+    for (const key of Object.keys(expected)) {
+      assert.deepEqual(actual[key].dims, expected[key].dims);
+      assert.deepEqual(actual[key].data, expected[key].data);
+      actual[key].dispose(); expected[key].dispose();
+    }
+  }
+});
+
+test('build patch rejects changed source or dependency version', async () => {
+  const source = await readFile(path.join(root, 'node_modules/@huggingface/tokenizers/dist/tokenizers.mjs'), 'utf8');
+  assert.throws(() => patchTokenizerSource('tokenizers', source, '0.1.4'), /source\/version mismatch/);
+  assert.throws(() => patchTokenizerSource('tokenizers', source + '\n', '0.1.3'), /source\/version mismatch/);
+});
+
+test('preparation awaits durable markers and retains file stages after model events evict recent records', async () => {
+  let saved;
+  const run = new RunDiagnostics('tokenizer', { loadOrder: 'tokenizer-before-session' }, async value => {
+    await Promise.resolve(); saved = structuredClone(value); return true;
+  });
+  const requests = [];
+  const result = await prepareTokenizer({ baseURL: 'https://example.com/web/sllm/worker.js', checkpoint: run.checkpoint,
+    fetchFile: async url => {
+      const file = String(url).split('/').at(-1); requests.push(file);
+      assert.equal(saved.last.stage, 'tokenizer-read-start');
+      assert.equal(saved.last.file, file);
+      return new Response(JSON.stringify(file === 'tokenizer_config.json' ? { tokenizer_class: 'GemmaTokenizer' } : { model: {} }));
+    },
+    createTokenizer: () => {
+      assert.equal(saved.last.stage, 'tokenizer-create-start');
+      assert.ok(saved.preparation['tokenizer.json']['tokenizer-parse-complete']);
+      return { _tokenizer: { model: { vocab: ['a'], merges: [] } } };
+    },
+  });
+  assert.deepEqual(requests, ['tokenizer_config.json', 'tokenizer.json']);
+  assert.equal(result.summary.vocabSize, 1);
+  for (let i = 0; i < 70; i++) await run.checkpoint({ stage: 'gpu-wait' });
+  assert.equal(saved.records.some(record => record.stage === 'tokenizer-ready'), false);
+  assert.ok(saved.preparation['tokenizer.json']['tokenizer-decode-start']);
+  assert.equal(diagnosticSummary(saved).tokenizer.vocabSize, 1);
+  assert.equal(diagnosticSummary(saved).loadOrder, 'tokenizer-before-session');
+  assert.equal(jsMemory().usedJSHeapBytes, null, 'Node has no performance.memory');
+});
+
+test('HTTP, decode and JSON failures retain the actual file and failing operation', async () => {
+  for (const [response, stage] of [
+    [() => new Response('', { status: 404 }), 'tokenizer-read-start'],
+    [() => new Response(new Uint8Array([255])), 'tokenizer-decode-start'],
+    [() => new Response('{broken'), 'tokenizer-parse-start'],
+  ]) {
+    const run = new RunDiagnostics('failed-tokenizer', {}, async () => true);
+    await assert.rejects(readPreparationFile({ file: 'tokenizer.json', url: 'https://example.com/tokenizer.json', json: true,
+      fetchFile: response, checkpoint: run.checkpoint }));
+    assert.equal(run.state.fault.file, 'tokenizer.json');
+    assert.equal(run.state.fault.observedDuring, stage);
+    await run.finish('failed');
+    assert.equal(diagnosticSummary(run.state).observedDuring, stage);
+  }
+});
+
+test('an interruption at parse-start stays cause unknown, and cancellation prevents construction', async () => {
+  const run = new RunDiagnostics('parse-interrupted', {}, async () => true);
+  await run.checkpoint({ stage: 'tokenizer-parse-start', file: 'tokenizer.json' });
+  const recovery = recoveryEvidence(run.state);
+  const summary = diagnosticSummary({ ...run.state, recovery });
+  assert.equal(recovery.cause, 'unknown');
+  assert.equal(summary.stage, 'tokenizer-parse-start');
+  assert.equal(summary.file, 'tokenizer.json');
+  assert.equal(summary.gpuWeightAllocated, null);
+  const controller = new AbortController();
+  await assert.rejects(prepareTokenizer({ baseURL: 'https://example.com/web/sllm/worker.js', signal: controller.signal,
+    checkpoint: async record => { if (record.stage === 'tokenizer-create-start') controller.abort(); },
+    fetchFile: async () => new Response('{}'),
+    createTokenizer: () => { assert.fail('cancelled initialization must not construct the tokenizer'); },
+  }), { name: 'AbortError' });
+});

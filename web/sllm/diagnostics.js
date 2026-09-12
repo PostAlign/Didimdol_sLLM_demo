@@ -44,10 +44,13 @@ const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-ver
   'resident-start',
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
   'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'ready', 'complete', 'failed', 'cancelled']);
-const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error']);
+const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error',
+  'tokenizer-error', 'template-error', 'evaluation-data-error']);
+const isPreparation = stage => /^(tokenizer|template|evaluation-data)-/.test(stage);
 
 // Keep binary hashes in diagnostics without copying the entire site inventory at every checkpoint.
 export const buildIdentity = build => ({ releaseId: build.releaseId, provenance: build.provenance,
+  tokenizer: build.tokenizer ?? null,
   ortVersion: build.ortVersion, transformersVersion: build.transformersVersion, rangeLoaderVersion: build.rangeLoaderVersion,
   modes: build.modes, builds: build.builds,
   runtimeAssets: Object.fromEntries(Object.entries(build.assets || {}).filter(([name]) => name.startsWith('web/vendor/'))) });
@@ -88,6 +91,10 @@ export function diagnosticSummary(run, sessionFallback = null) {
     ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
     ?? run.milestones?.['weights-prepared']?.storage ?? null;
   return { effectiveStatus: fault ? 'failed' : interrupted ? 'interrupted' : run.status,
+    file: fault?.file ?? last.file ?? null, observedDuring: fault?.observedDuring ?? last.observedDuring ?? null,
+    loadOrder: run.environment?.loadOrder ?? session?.loadOrder ?? null,
+    tokenizer: run.summary?.tokenizer ?? session?.tokenizer ?? run.milestones?.['tokenizer-ready'] ?? null,
+    jsMemory: last.jsMemory ?? null,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
     destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
     loadedInitializerCount: metrics.loadedInitializerCount ?? progress.loadedInitializerCount ?? run.summary?.loadedInitializerCount ?? null,
@@ -122,7 +129,7 @@ export class RunDiagnostics {
     this.persist = persist;
     this.state = { schemaVersion: 3, runId, startedAt: Date.now(), status: 'running', environment,
       records: [], last: null, fault: null, firstFault: null, summary: null,
-      milestones: {}, files: {}, initializerOrder: [], droppedInitializers: 0, recordCount: 0,
+      milestones: {}, files: {}, preparation: {}, initializerOrder: [], droppedInitializers: 0, recordCount: 0,
       persistence: { completed: 0, failures: 0, totalMs: 0, peakMs: 0,
         note: 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings.' },
       memoryNote: 'Allocation counters and WASM capacity are not process RSS or driver memory.' };
@@ -138,6 +145,12 @@ export class RunDiagnostics {
       if (value.stage === 'device-lost' || (!this.state.fault && ['worker-error', 'gpu-uncaptured-error'].includes(value.stage))) this.state.fault = value;
       if (!this.state.fault && FAULTS.has(value.stage)) this.state.fault = value;
       if (MILESTONES.has(value.stage)) this.state.milestones[value.stage] = value;
+      if (isPreparation(value.stage)) {
+        this.state.milestones[value.stage] = value;
+        const file = value.file || 'shared';
+        this.state.preparation[file] ||= {};
+        this.state.preparation[file][value.stage] = value;
+      }
       if (value.stage.startsWith('weight-') && value.location &&
           (this.state.files[value.location] || Object.keys(this.state.files).length < 64)) this.state.files[value.location] = value;
       if (value.stage === 'allocate-initializer' || value.stage === 'resident-allocate') {

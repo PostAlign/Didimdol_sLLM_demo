@@ -2,6 +2,7 @@ const HASH = /^[a-f0-9]{64}$/;
 export const releaseDescriptor = manifest => ({ releaseSchema: manifest.releaseSchema,
   ortVersion: manifest.ortVersion, transformersVersion: manifest.transformersVersion,
   rangeLoaderVersion: manifest.rangeLoaderVersion, modes: manifest.modes, builds: manifest.builds,
+  ...(manifest.tokenizer ? { tokenizer: manifest.tokenizer } : {}),
   provenance: manifest.provenance, assets: manifest.assets });
 export function validateRelease(build) {
   if (build?.releaseSchema !== 1 || !HASH.test(build.releaseId) || !build.assets || !build.modes?.length) {

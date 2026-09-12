@@ -107,6 +107,65 @@ try {
     }
     await page.close();
   }
+  // Exercise the real tokenizer diagnostic through the UI and export its durable stages.
+  {
+    const page = await browser.newPage();
+    const modelRequests = [];
+    page.on('request', request => { if (/model\.onnx|\.wasm(?:\?|$)/.test(request.url())) modelRequests.push(request.url()); });
+    await page.goto(`${origin}/web/sllm/experiments/index.html`);
+    await page.locator('#kind').selectOption('tokenizer');
+    assert.equal(await page.locator('#staging').isDisabled(), true);
+    await page.locator('#start').click();
+    await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
+    const stored = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')));
+    const result = stored.results.at(-1);
+    assert.equal(result.success, true);
+    assert.equal(result.execution.completedScope, 'tokenizer-preparation');
+    assert.equal(result.execution.loadOrder, 'tokenizer-only');
+    assert.equal(result.execution.tokenizerBuild.implementation, 'incremental-bpe-v1');
+    assert.equal(result.comparison.gpuWeightAllocated, null);
+    const run = await page.evaluate(async runId => {
+      const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
+      return (await import(asset('web/sllm/diagnostics.js'))).readRun(runId);
+    }, result.runId);
+    assert.equal(run.summary.tokenizer.vocabSize, 262145, 'vocabulary includes the added token at ID 262144');
+    assert.equal(run.summary.tokenizer.mergeCount, 514906);
+    assert.ok(run.preparation['tokenizer.json']['tokenizer-parse-start']);
+    assert.ok(run.milestones['tokenizer-ready']);
+    assert.equal(run.milestones['session-create'], undefined);
+    assert.equal(run.milestones.ready, undefined);
+    assert.deepEqual(modelRequests, [], 'tokenizer diagnostic must not fetch model weights or instantiate WASM');
+    results.push({ id: 'tokenizer-ui', success: true, tokenizer: run.summary.tokenizer,
+      preparation: run.preparation, noModelOrWasmRequests: true });
+    await page.evaluate(async runId => {
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      state.active = { kind: 'tokenizer', runId, startedAt: Date.now() };
+      sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+    }, result.runId);
+    await page.reload();
+    await page.locator('#status').getByText('이전 실험 완료 기록을 복구했습니다.').waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1).success), true);
+    await page.evaluate(async () => {
+      const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
+      const { RunDiagnostics } = await import(asset('web/sllm/diagnostics.js'));
+      const run = new RunDiagnostics('tokenizer-parse-interrupted');
+      await run.checkpoint({ stage: 'tokenizer-parse-start', file: 'tokenizer.json' });
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      state.active = { kind: 'tokenizer', runId: run.state.runId, startedAt: run.state.startedAt };
+      sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+    });
+    await page.reload();
+    await page.locator('#status').getByText('이전 실험 기록을 복구했습니다. 진단 JSON을 저장해 주세요.').waitFor();
+    const recovered = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    assert.equal(recovered.interrupted, true);
+    assert.equal(recovered.success, false);
+    assert.equal(recovered.comparison.file, 'tokenizer.json');
+    assert.equal(recovered.comparison.stage, 'tokenizer-parse-start');
+    assert.match(await page.locator('#rows').innerText(), /tokenizer-parse-start · tokenizer.json/);
+    assert.deepEqual(modelRequests, [], 'recovery must not restart loading');
+    results.push({ id: 'tokenizer-recovery-ui', success: true, completedRunRecovered: true, interruptedParseRecovered: true });
+    await page.close();
+  }
   if (process.env.TEST_APP_LOAD === '1') {
     const page = await browser.newPage();
     await page.goto(origin);
@@ -135,13 +194,14 @@ try {
     const result = await page.evaluate(async origin => {
       const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
       const worker = new Worker(asset('web/sllm/worker.js'), { type: 'module' });
+      const loadRunId = crypto.randomUUID();
       const probeRunId = crypto.randomUUID();
       return await new Promise((resolve, reject) => {
         let sessionResult, probeResult;
         const timer = setTimeout(() => { worker.terminate(); reject(new Error('App load/probe timed out')); }, 600000);
         worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
         worker.onmessage = async ({ data }) => {
-          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 2 });
+          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 2, runId: loadRunId });
           if (data.type === 'session-result') sessionResult = data.result;
           if (data.type === 'fatal') { clearTimeout(timer); worker.terminate(); reject(new Error(data.error)); }
           if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2 });
@@ -153,7 +213,9 @@ try {
               try {
                 const { readRun } = await import(asset('web/sllm/diagnostics.js'));
                 const run = await readRun(probeRunId);
+                const loaded = await readRun(loadRunId);
                 resolve({ id: 'app-from-pretrained', ...sessionResult, ...probeResult, cleanupVerified: true,
+                  loadStatus: loaded.status, loadMilestones: loaded.milestones,
                   probeEnvironment: run.environment });
               } catch (error) { reject(error); }
             }
@@ -169,6 +231,10 @@ try {
     assert.deepEqual(result.outputs.map(output => output.promptLen), [35, 266]);
     assert.deepEqual(result.outputs.map(output => output.tokens), [[238789, 236764], [238789, 236764]], 'recorded FP32 real-prompt baseline');
     assert.equal(result.metrics.loadedInitializerCount, 251);
+    assert.equal(result.loadStatus, 'ready');
+    assert.equal(result.loadOrder, 'tokenizer-before-session');
+    assert.ok(result.loadMilestones['tokenizer-ready'].timestamp < result.loadMilestones['session-create'].timestamp);
+    assert.equal(result.loadMilestones['tokenizer-ready'].vocabSize, 262145);
     assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
     assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
     assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);

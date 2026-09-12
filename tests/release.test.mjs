@@ -46,6 +46,16 @@ test('manifest rejects incorrect binary metadata and paths escaping the release'
   assert.throws(() => validateRelease(unsafe), /Invalid release asset/);
 });
 
+test('tokenizer implementation and patch hashes participate in the release identity', async t => {
+  const { build } = await fixture(t);
+  const original = releaseId(build);
+  build.tokenizer = { implementation: 'incremental-bpe-v1', patchSha256: sha('patch-one') };
+  const patched = releaseId(build);
+  assert.notEqual(patched, original);
+  build.tokenizer.patchSha256 = sha('patch-two');
+  assert.notEqual(releaseId(build), patched);
+});
+
 test('a mismatched nested manifest is rejected before it can select a different runtime', async t => {
   const f = await fixture(t);
   await writeFile(path.join(f.destination, 'web/vendor/build.json'), JSON.stringify({ ...f.build, assetBase: '../' }));

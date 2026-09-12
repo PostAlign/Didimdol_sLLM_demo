@@ -8,6 +8,7 @@ import { SessionRangeLoader } from './range-loader.js';
 import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext } from './diagnostics.js';
 import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
+import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
 
 import { makeRouge1 } from './rouge.js';
 
@@ -99,6 +100,7 @@ class TimingStreamer extends BaseStreamer {
 }
 
 let tokenizer = null, model = null, rouge1 = null;
+let tokenizerResult = null;
 let chatTemplate = null, rows = null;
 let device = 'wasm', aborted = false;
 const stopper = new InterruptableStoppingCriteria();
@@ -124,11 +126,58 @@ async function pruneStaleCache() {
 // ── 로드 ────────────────────────────────────────────────────────────────────
 // A failed WebGPU session is not retried in a heap that may retain allocations.
 
+async function loadTokenizer(loadOrder = LOAD_ORDER) {
+  if (typeof AutoTokenizer.from_json !== 'function' || runtimeBuild.tokenizer?.implementation !== 'incremental-bpe-v1') {
+    throw new Error('토크나이저 런타임을 새로 빌드해야 합니다. npm run build를 실행해 주세요.');
+  }
+  const result = await prepareTokenizer({
+    createTokenizer: (data, config) => AutoTokenizer.from_json(data, config),
+    baseURL: import.meta.url, build: runtimeBuild, checkpoint: journal.checkpoint, signal: loadController.signal, loadOrder,
+    emit: record => {
+      post({ type: 'preparation', record });
+      const phase = record.stage.includes('create') ? '토크나이저 구성 중…'
+        : record.stage.includes('parse') ? '토크나이저 데이터 해석 중…' : '토크나이저 준비 중…';
+      post({ type: 'phase', text: phase });
+      if (record.file === 'tokenizer.json' && record.stage === 'tokenizer-read-start') {
+        post({ type: 'dl', which: 'tok', status: 'progress', loaded: 0, total: record.expectedBytes });
+      }
+      if (record.file === 'tokenizer.json' && record.stage === 'tokenizer-read-complete') {
+        post({ type: 'dl', which: 'tok', status: 'done', loaded: record.bytes, total: record.bytes });
+      }
+    },
+  });
+  tokenizer = result.tokenizer;
+  tokenizerResult = result.summary;
+}
+
+async function loadEvaluationInputs() {
+  const read = (file, relative, prefix) => readPreparationFile({ file, prefix, url: new URL(relative, import.meta.url),
+    checkpoint: journal.checkpoint, signal: loadController.signal,
+    emit: record => post({ type: 'preparation', record }) });
+  chatTemplate = (await read('chat_template.jinja', '../../tokenizer/chat_template.jinja', 'template')).value;
+  const source = (await read('data.jsonl', './data.jsonl', 'evaluation-data')).value;
+  await journal.checkpoint({ stage: 'evaluation-data-parse-start' });
+  try { rows = source.split('\n').filter(Boolean).map(JSON.parse); }
+  catch (error) {
+    await journal.checkpoint({ stage: 'evaluation-data-error', observedDuring: 'evaluation-data-parse-start', message: String(error) });
+    throw error;
+  }
+  await journal.checkpoint({ stage: 'evaluation-data-ready', rows: rows.length });
+  rouge1 = makeRouge1(tokenizer);
+}
+
 async function load({ device: preferred, stagingMiB = 8 }) {
   const loadStarted = performance.now(), timings = {};
   if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
-  env.useBrowserCache = true;   // 그래프(1 MB)·설정·토크나이저만 transformers.js 가 캐시한다. 가중치는 여기서.
+  env.useBrowserCache = true;   // 작은 모델 설정만 라이브러리 캐시 사용. 토크나이저는 릴리스 URL, 가중치는 OPFS.
   await pruneStaleCache();
+
+  // Construct the large JS vocabulary before any full-model GPU buffers exist.
+  await loadTokenizer();
+  timings.tokenizerPreparationMs = tokenizerResult.durationMs;
+  const inputsStarted = performance.now();
+  await loadEvaluationInputs();
+  timings.evaluationInputPreparationMs = performance.now() - inputsStarted;
 
   // 모바일 빌드 자체가 단일 스레드이며 런타임 설정도 일치시킨다.
   try {
@@ -141,13 +190,14 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     if (!which) return;
     // 그래프 파일(1 MB)이 오고 나면 콜백 없는 구간(세션 생성)만 남는다. 문구로 단계를 드러낸다.
     if (which === 'graph' && p.status === 'done') {
-      post({ type: 'phase', text: 'ORT 세션 생성 중… (진행률 없음 · 메모리 최대 구간)' });
+      post({ type: 'phase', text: 'ORT 세션 생성 중… (진행률 없음)' });
     }
     if (which !== 'tok' || (p.status !== 'progress' && p.status !== 'done')) return;
     post({ type: 'dl', which, status: p.status, loaded: p.loaded, total: p.total });
   };
 
   post({ type: 'phase', text: '그래프와 initializer 메타데이터 확인 중…' });
+  const graphStarted = performance.now();
   const manifestResponse = await fetch(new URL('../../model/initializers.json', import.meta.url));
   if (!manifestResponse.ok) throw new Error('initializer manifest missing; run tools/inspect_initializers.py');
   const manifest = await manifestResponse.json();
@@ -162,7 +212,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     expectedInitializerCount: manifest.initializers.filter(t => t.location).length,
     expectedGpuResidentBytes: manifest.totalExternalTensorBytes });
   console.info('[MODEL] graph loaded', { bytes: verifiedGraph.byteLength, sha256: hash });
-  timings.graphPreparationMs = performance.now() - loadStarted;
+  timings.graphPreparationMs = performance.now() - graphStarted;
   // Ensure from_pretrained consumes the verified graph via env.fetch rather
   // than bypassing it with a separately cached graph response.
   env.useBrowserCache = false;
@@ -217,6 +267,7 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     const metrics = loader.close(success);
     weightStore.close();
     const result = { stage: success ? 'session-create-complete' : 'session-create-failed',
+      loadOrder: LOAD_ORDER, tokenizer: tokenizerResult,
       runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics,
       gpuLedger: { ...tracked.ledger }, storage: { ...weightStore.metrics }, lastInitializer: loader.last };
     result.timings = { ...timings };
@@ -228,19 +279,6 @@ async function load({ device: preferred, stagingMiB = 8 }) {
     verifiedGraph = null;
   }
   env.useBrowserCache = true;
-  const tokenizerStarted = performance.now();
-  await journal.checkpoint({ stage: 'tokenizer-load', metrics: loader.sampleMetrics(), gpuLedger: { ...tracked.ledger } });
-  post({ type: 'phase', text: '토크나이저 내려받는 중…' });
-  [tokenizer, chatTemplate, rows] = await Promise.all([
-    AutoTokenizer.from_pretrained(REPO, { revision: REVISION, progress_callback }),
-    // chat_template 은 tokenizer_config.json 에 없고, AutoTokenizer 는 .jinja 를
-    // 받아오지 않는다(그 경로는 Processor 전용). 직접 읽어서 명시적으로 넘긴다.
-    fetch(new URL('../../tokenizer/chat_template.jinja', import.meta.url)).then(r => r.text()),
-    fetch(new URL('./data.jsonl', import.meta.url)).then(r => r.text()).then(t =>
-      t.split('\n').filter(Boolean).map(JSON.parse)),
-  ]);
-  rouge1 = makeRouge1(tokenizer);
-  timings.tokenizerPreparationMs = performance.now() - tokenizerStarted;
   timings.totalLoadMs = performance.now() - loadStarted;
   sessionMetrics.timings = { ...timings };
 
@@ -410,6 +448,7 @@ self.onmessage = async ({ data }) => {
     operation = 'dispose';
     try {
       await model?.dispose(); model = null;
+      tokenizer = null; tokenizerResult = null; chatTemplate = null; rows = null; rouge1 = null;
       for (const gpuDevice of trackedGpu?.devices || []) await gpuDevice.queue.onSubmittedWorkDone();
       await trackedGpu?.flush();
       for (const gpuDevice of trackedGpu?.devices || []) gpuDevice.destroy();
@@ -419,17 +458,25 @@ self.onmessage = async ({ data }) => {
     finally { trackedGpu?.restore(); operation = null; }
     return;
   }
-  if (!['load', 'run', 'probe'].includes(data.type)) return;
-  if (operation) { if (data.type !== 'load') queuedRun = data; return; }
+  if (!['load', 'tokenizer', 'run', 'probe'].includes(data.type)) return;
+  if (operation) { if (!['load', 'tokenizer'].includes(data.type)) queuedRun = data; return; }
   operation = data.type;
   aborted = false;
-  if (operation === 'load') loadController = new AbortController();
+  if (operation === 'load' || operation === 'tokenizer') loadController = new AbortController();
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent, runtimeMode,
-    stagingMiB: operation === 'load' ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8, workerURL: self.location.href });
+    loadOrder: operation === 'tokenizer' ? 'tokenizer-only' : LOAD_ORDER,
+    stagingMiB: operation === 'tokenizer' ? null : operation === 'load' ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+    workerURL: self.location.href });
   try {
     journal.state.environment.build = buildIdentity(runtimeBuild);
     await journal.checkpoint({ stage: `${operation}-start` });
-    if (data.type === 'load') {
+    if (data.type === 'tokenizer') {
+      if (model || tokenizer) throw new Error('Use a fresh worker for the tokenizer diagnostic');
+      await loadTokenizer('tokenizer-only');
+      const result = { success: true, tokenizer: tokenizerResult, tokenizerPrepared: true, modelSessionCreated: false };
+      await journal.finish('complete', result);
+      post({ type: 'result', result });
+    } else if (data.type === 'load') {
       if (model) throw new Error('A model is already loaded in this worker');
       if (runtimeMode === 'stock') throw new Error('Production loading requires the OPFS range runtime. Use experiments for stock comparisons.');
       if (runtimeBuild.rangeLoaderVersion !== 2) throw new Error('런타임을 새로 빌드해야 합니다: range-loader ABI 2 필요');
@@ -445,10 +492,11 @@ self.onmessage = async ({ data }) => {
       else await runAll();
     }
   } catch (err) {
-    const cancelled = data.type === 'load' && loadController?.signal.aborted;
+    const cancelled = ['load', 'tokenizer'].includes(data.type) && loadController?.signal.aborted;
     await trackedGpu?.flush();
     trackedGpu?.restore();
-    await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics });
+    await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,
+      tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage });
     // A failed create/generate may retain native allocations. Use a fresh worker/page.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
   } finally {

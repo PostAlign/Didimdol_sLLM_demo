@@ -34,6 +34,7 @@ export async function packageRelease(root, runtimeBuild) {
     assets[name] = await hashStream(createReadStream(path.join(root, name)));
   }
   const build = { releaseSchema: 1, ortVersion: previous.ortVersion, transformersVersion: previous.transformersVersion,
+    ...(previous.tokenizer ? { tokenizer: previous.tokenizer } : {}),
     rangeLoaderVersion: previous.rangeLoaderVersion, modes: previous.modes, builds: previous.builds,
     provenance: { appCommit: git(root, 'rev-parse', 'HEAD'), appDirty: !!git(root, 'status', '--porcelain'),
       nodeVersion: process.version }, assets };

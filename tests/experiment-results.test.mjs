@@ -2,6 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executionSettings, executionEvidence, seriesSummary } from '../web/sllm/experiments/results.js';
 
+test('tokenizer completion requires preparation evidence and cannot claim model loading or inference', () => {
+  const result = { kind: 'tokenizer', success: true, mode: 'asyncify' };
+  assert.equal(executionEvidence(result).completedScope, null);
+  const run = { summary: { tokenizerPrepared: true, modelSessionCreated: false,
+    tokenizer: { loadOrder: 'tokenizer-only', tokenizerBuild: { implementation: 'incremental-bpe-v1' } } } };
+  const evidence = executionEvidence(result, run);
+  assert.equal(evidence.completedScope, 'tokenizer-preparation');
+  assert.equal(evidence.loadOrder, 'tokenizer-only');
+  assert.equal(evidence.tokenizerBuild.implementation, 'incremental-bpe-v1');
+  assert.equal(executionEvidence({ ...result, success: false }, run).completedScope, null);
+});
+
 test('old resident exports cannot claim an ORT run, idle acceptance, or three completed attempts', () => {
   const result = { kind: 'resident', mode: 'asyncify', success: true, allBytesUsed: true,
     idleSeconds: 120, repeats: 3, runId: 'resident-one' };

@@ -1,0 +1,153 @@
+{
+  "recordedAt": "2026-09-12T07:42:37.999834+00:00",
+  "releaseId": "e3b43d2fe8ec3f6db9a7137a51d67278f711c9d94f2e85de77f8ca809514af1a",
+  "provenance": {
+    "appCommit": "d8c3faac4e9f00d5c529193a64a6b1390f23b0d9",
+    "appDirty": true,
+    "nodeVersion": "v22.22.1"
+  },
+  "tokenizerBuild": {
+    "implementation": "incremental-bpe-v1",
+    "version": "0.1.3",
+    "transformersVersion": "4.2.0",
+    "sourceSha256": "6d92e25f9576e67124b3a3f910f5cc1df95a42bde4df4f5387f62dee4554f301",
+    "autoTokenizerSourceSha256": "d1ef852e81052053c459b3c0ad424cea54cde9e078615d613cce012e43b0962a",
+    "patchSha256": "a6a146eb25a348f3182eb1063a2f19353e3cca1bc9b21b3003ff8ff8baa0ab37"
+  },
+  "environment": {
+    "node": "v22.22.1",
+    "browserUserAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+    "gpu": "SwiftShader software WebGPU",
+    "runtimeModes": [
+      "asyncify",
+      "jspi",
+      "stock"
+    ],
+    "fullAppMode": "asyncify",
+    "fullAppStagingMiB": 2,
+    "fullAppStorageQuotaOverrideBytes": 8589934592
+  },
+  "unitTests": {
+    "command": "npm test",
+    "passed": 41,
+    "failed": 0,
+    "tokenizerEquivalence": "Upstream vs patched token IDs and decode on all evaluation messages and Unicode/special-token cases; chat template tensors on all 100 rows."
+  },
+  "build": {
+    "command": "npm run build",
+    "passed": true,
+    "releaseVerification": {
+      "passed": true,
+      "verifiedAssets": 64
+    }
+  },
+  "browser": {
+    "command": "TEST_APP_LOAD=1 npm run test:browser",
+    "passed": true,
+    "checks": [
+      "smoke-asyncify",
+      "resident-asyncify",
+      "runtime-asyncify",
+      "resident-opfs-asyncify",
+      "smoke-jspi",
+      "runtime-jspi",
+      "smoke-stock",
+      "tokenizer-ui",
+      "app-from-pretrained",
+      "full-opfs-resident",
+      "gpu-tracking-browser",
+      "resident-corruption",
+      "diagnostic-ui"
+    ],
+    "tokenizerOnly": {
+      "noModelOrWasmRequests": true,
+      "vocabSize": 262145,
+      "mergeCount": 514906
+    },
+    "fullApp": {
+      "status": "ready",
+      "loadOrder": "tokenizer-before-session",
+      "loadedInitializers": 251,
+      "uploadedBytes": 1072392704,
+      "tokenizerReadyBeforeSessionCreate": true,
+      "timingsMs": {
+        "tokenizerPreparationMs": 650.9000000059605,
+        "evaluationInputPreparationMs": 22.099999994039536,
+        "graphPreparationMs": 40.19999998807907,
+        "weightPreparationMs": 20715.70000001788,
+        "modelLoadCallMs": 10590.5,
+        "totalLoadMs": 32035.29999998212
+      },
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 14323,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 31957.80000001192,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "cleanupVerified": true
+    },
+    "recovery": {
+      "command": "ORT_MODES=asyncify npm run test:browser",
+      "passed": true,
+      "completedTokenizerRecovered": true,
+      "interruptedParseStageAndFileRecovered": true,
+      "automaticRetry": false
+    }
+  },
+  "nodeMemoryComparison": {
+    "command": "node tools/measure-tokenizer.mjs",
+    "method": "Node-only BPE comparison; same preparation loader, fresh process per run. Not iPhone RSS.",
+    "baselineUsesNewLoader": true,
+    "measurements": {
+      "baseline": {
+        "maxRSSMiB": [
+          402.91,
+          401.86,
+          406.02
+        ],
+        "medianMaxRSSMiB": 402.91,
+        "medianRetainedJSHeapMiB": 142.18,
+        "preparationMs": [
+          1208.3,
+          817.4,
+          789.0
+        ]
+      },
+      "patched": {
+        "maxRSSMiB": [
+          327.52,
+          334.16,
+          330.26
+        ],
+        "medianMaxRSSMiB": 330.26,
+        "medianRetainedJSHeapMiB": 142.4,
+        "preparationMs": [
+          785.6,
+          671.8,
+          644.6
+        ]
+      }
+    },
+    "medianPeakReductionPercent": 18.03
+  },
+  "limitations": [
+    "No iPhone execution or OS termination report is available for this revision.",
+    "Node comparison isolates BPE construction using the same new loader. It does not measure the effect of tokenizer-first GPU loading.",
+    "Retained JS heap is essentially unchanged; lower construction peak does not establish sufficient iPhone process memory.",
+    "Desktop full-app checks use local streams of the same verified FP32 weights and two generated tokens on each real prompt. Two full 100-row evaluations and repeated iPhone loads remain device acceptance checks."
+  ]
+}
