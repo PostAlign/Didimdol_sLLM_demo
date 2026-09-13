@@ -1,14 +1,14 @@
-import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel, pageNavigationType, unloadLabel } from '../diagnostics.js';
+import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel, pageNavigationType, unloadLabel, localTimestamp, deviceClock } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
-import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice } from './results.js';
+import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice, runContext, parseDeviceLogNote } from './results.js';
 import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
 
 const $ = id => document.getElementById(id);
 const storages = { local: localStorage, session: sessionStorage };
 const state = loadExperimentState(storages);
 const save = () => saveExperimentState(state, storages);
-let worker, sessionResult, evaluationCount = 0, finishing = false;
-const controlIds = ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
+let worker, sessionResult, evaluationCount = 0, finishing = false, repeatWait = null;
+const controlIds = ['device', 'mode', 'staging', 'repeats', 'repeatDelay', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
 // Exports without OS/browser versions cannot be compared; the model name is still typed by hand.
 $('device').value = state.device || describeDevice(navigator.userAgent); $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
@@ -18,6 +18,7 @@ $('modelExecution').value = state.modelExecution || 'resident';
 $('sessionIdle').value = String(state.sessionIdle ?? 0);
 $('inspector').value = state.inspector || 'unknown';
 $('repeats').value = String(state.repeats || 1);
+$('repeatDelay').value = String(state.repeatDelay ?? 0);
 $('kind').value = state.kind || 'resident';
 function updateControls() {
   const evaluationURL = new URL('../../../index.html', location.href);
@@ -31,6 +32,7 @@ function updateControls() {
   if (!state.active) {
     $('mode').disabled = isResident($('kind').value);
     $('repeats').disabled = !canRepeat($('kind').value);
+    $('repeatDelay').disabled = !(canRepeat($('kind').value) || $('kind').value === 'warm-load');
     $('staging').disabled = $('kind').value === 'tokenizer';
     $('tokenizerFormat').disabled = ['resident', 'resident-opfs', 'runtime', 'runtime-resident', 'session-only'].includes($('kind').value);
     $('sessionIdle').disabled = $('kind').value !== 'session-only';
@@ -76,8 +78,30 @@ function render() {
       result.durationMs == null ? '—' : `${(result.durationMs / 1000).toFixed(1)}초`]) {
       const td = document.createElement('td'); td.textContent = value; tr.append(td);
     }
+    tr.append(deviceLogCell(result));
     return tr;
   }));
+}
+// The tester matches each interrupted row with the JetsamEvent/WebContent file
+// from the phone's Analytics Data list. Those files are stamped in device local
+// time, so the row shows its last record in the same clock.
+function deviceLogCell(result) {
+  const td = document.createElement('td');
+  const at = result.lastRecordAt ?? result.endedAt ?? result.startedAt;
+  const when = localTimestamp(at);
+  const log = result.deviceLog;
+  const summary = log ? [log.file, log.reason, log.footprintMiB == null ? null : `${log.footprintMiB} MiB`].filter(Boolean).join(' · ') || log.note : '기록 없음';
+  const text = document.createElement('div'); text.textContent = `${when ? `${when.slice(11, 19)} 기준 · ` : ''}${summary}`;
+  const button = document.createElement('button'); button.type = 'button'; button.textContent = log ? '기기 로그 수정' : '기기 로그 메모';
+  button.onclick = () => {
+    const note = prompt(`이 실행${when ? ` (${when})` : ''}과 같은 시각의 기기 로그를 적어 주세요.\n예: JetsamEvent-2026-09-13-163104.ips · per-process-limit · 1,024 MiB`, log?.note || '');
+    if (note == null) return;
+    const parsed = parseDeviceLogNote(note);
+    result.deviceLog = parsed ? { ...parsed, recordedAt: Date.now() } : null;
+    save(); render();
+  };
+  td.append(text, button);
+  return td;
 }
 if (state.active) {
   const diagnostic = await readRun(state.active.runId);
@@ -99,6 +123,7 @@ if (state.active) {
     diagnostic?.cleanup?.success === false || !!diagnostic?.cleanupError ||
     (kind === 'warm-load' && diagnostic?.status === 'ready' && !success);
   state.results.push({ ...state.active, success, cancelled, interrupted: !success && !cancelled && !knownFailure,
+    endedAt: recovery?.observedAt ?? Date.now(), lastRecordAt: diagnostic?.last?.timestamp ?? null,
     execution: executionEvidence({ ...state.active, success }, diagnostic),
     comparison: diagnosticSummary(diagnostic && { ...diagnostic, recovery }, state.active.sessionResult) });
   if (state.results.length > MAX_RESULTS) state.results.shift();
@@ -150,7 +175,8 @@ async function finish(result) {
   if (diagnostic?.fault && !result.cancelled) { result.success = false; result.error ||= diagnostic.fault.message || diagnostic.fault.stage; }
   state.results.push({ ...active, ...result, releaseId: diagnostic?.environment?.build?.releaseId || active.releaseId,
     execution: executionEvidence({ ...active, ...result }, diagnostic),
-    durationMs: Date.now() - active.startedAt, sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
+    durationMs: Date.now() - active.startedAt, endedAt: Date.now(), lastRecordAt: diagnostic?.last?.timestamp ?? null,
+    sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
   if (state.results.length > MAX_RESULTS) state.results.shift();
   state.active = null; finishing = false;
   save(); render();
@@ -158,11 +184,29 @@ async function finish(result) {
   updateControls();
   $('status').textContent = result.success ? scopeLabel(state.results.at(-1).execution.completedScope) : result.cancelled ? '사용자가 중단했습니다.' : '실험 실패 · 진단 JSON을 저장해 주세요.';
   $('last').textContent = JSON.stringify({ ...state.results.at(-1), diagnostic }, null, 2);
-  if (result.success && active.remaining > 1) reloadFor({ kind: active.kind, remaining: active.remaining - 1,
-    seriesId: active.seriesId, requestedRuns: active.requestedRuns, attemptNumber: active.attemptNumber + 1,
-    diagnosticsMode: active.diagnosticsMode, mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
-    tokenizerFormat: active.tokenizerFormat, modelExecution: active.modelExecution, idleSeconds: active.idleSeconds,
-    reportedDevice: active.reportedDevice, releaseId: active.releaseId }, 'repeat', active.runId);
+  if (result.success && active.remaining > 1) {
+    const next = { kind: active.kind, remaining: active.remaining - 1,
+      seriesId: active.seriesId, requestedRuns: active.requestedRuns, attemptNumber: active.attemptNumber + 1,
+      diagnosticsMode: active.diagnosticsMode, mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
+      tokenizerFormat: active.tokenizerFormat, modelExecution: active.modelExecution, idleSeconds: active.idleSeconds,
+      repeatDelaySeconds: active.repeatDelaySeconds ?? 0, reportedDevice: active.reportedDevice, releaseId: active.releaseId };
+    const delayMs = (active.repeatDelaySeconds || 0) * 1000;
+    if (!delayMs) return reloadFor(next, 'repeat', active.runId);
+    // The wait is observable and cancellable; nothing is persisted until the
+    // reload is actually scheduled, so closing the tab simply ends the series.
+    const due = Date.now() + delayMs;
+    const tick = () => { $('status').textContent = `다음 반복까지 ${Math.max(0, Math.ceil((due - Date.now()) / 1000))}초 대기 중 (중단 버튼으로 취소)`; };
+    tick();
+    $('stop').disabled = false; $('start').disabled = true;
+    repeatWait = { interval: setInterval(tick, 500),
+      timeout: setTimeout(() => { cancelRepeatWait(); if (!state.active) reloadFor(next, 'repeat', active.runId); }, delayMs) };
+  }
+}
+function cancelRepeatWait() {
+  if (!repeatWait) return false;
+  clearInterval(repeatWait.interval); clearTimeout(repeatWait.timeout); repeatWait = null;
+  $('stop').disabled = true; $('start').disabled = !!state.active;
+  return true;
 }
 async function begin(config) {
   if (state.active) return;
@@ -195,10 +239,15 @@ async function begin(config) {
   }
   if (!state.active) return;
   state.active.releaseId = release.build.releaseId; save();
+  // Previous-run context is captured before this run writes anything, so an
+  // interruption still leaves what preceded it in the run header.
+  const context = runContext(state.results, Date.now());
+  state.active.runContext = context; save();
   const environment = { reportedDevice: config.reportedDevice, userAgent: navigator.userAgent, experiment: config.kind,
     inspector: config.inspector, diagnosticsMode: config.diagnosticsMode, stagingMiB: config.stagingMiB, ...executionSettings(config.kind, config),
     tokenizerFormat: config.tokenizerFormat, modelExecution: config.modelExecution || 'resident', navigation: config.navigation ?? null,
-    seriesId: config.seriesId, requestedRuns: config.requestedRuns, attemptNumber: config.attemptNumber };
+    seriesId: config.seriesId, requestedRuns: config.requestedRuns, attemptNumber: config.attemptNumber,
+    repeatDelaySeconds: config.repeatDelaySeconds ?? 0, runContext: context };
   await saveCheckpoint({ schemaVersion: 3, runId, status: 'running', environment: { ...environment, build: buildIdentity(release.build) },
     last: { stage: 'worker-start', timestamp: Date.now() } }, runKey(runId));
   if (!state.active) return;
@@ -251,18 +300,22 @@ async function begin(config) {
   $('stop').disabled = false;
 }
 $('start').onclick = () => {
+  cancelRepeatWait();
   state.device = $('device').value; state.mode = $('mode').value;
   state.diagnosticsMode = $('diagnosticsMode').value;
   state.modelExecution = $('modelExecution').value;
   state.tokenizerFormat = $('tokenizerFormat').value; state.sessionIdle = Number($('sessionIdle').value);
   state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
+  state.repeatDelay = Number($('repeatDelay').value) || 0;
   const kind = $('kind').value;
   state.kind = kind;
   reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : canRepeat(kind) ? state.repeats : 1,
     tokenizerFormat: state.tokenizerFormat, modelExecution: state.modelExecution, ...(kind === 'session-only' ? { idleSeconds: state.sessionIdle } : {}),
-    diagnosticsMode: state.diagnosticsMode, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, reportedDevice: state.device });
+    repeatDelaySeconds: state.repeatDelay, diagnosticsMode: state.diagnosticsMode, mode: state.mode, stagingMiB: state.stagingMiB,
+    inspector: state.inspector, reportedDevice: state.device });
 };
 $('stop').onclick = async () => {
+  if (cancelRepeatWait()) { $('status').textContent = '남은 반복을 취소했습니다.'; updateControls(); return; }
   const active = state.active;
   if (!active || finishing) return;
   $('stop').disabled = true;
@@ -284,11 +337,18 @@ $('export').onclick = async () => {
   for (const id of state.active?.runIds || []) ids.add(id);
   const runs = await Promise.all([...ids].map(readRun));
   const byId = new Map(runs.filter(Boolean).map(run => [run.runId, run]));
-  const results = state.results.map(result => ({ ...result,
-    execution: executionEvidence(result, byId.get(result.runId)) }));
-  const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(), userAgent: navigator.userAgent,
+  const clock = deviceClock();
+  const results = state.results.map(result => {
+    const lastRecordAt = result.lastRecordAt ?? byId.get(result.runId)?.last?.timestamp ?? null;
+    return { ...result, execution: executionEvidence(result, byId.get(result.runId)),
+      startedAtLocal: localTimestamp(result.startedAt, clock.timezoneOffsetMinutes),
+      lastRecordAt, lastRecordAtLocal: localTimestamp(lastRecordAt, clock.timezoneOffsetMinutes),
+      deviceLog: result.deviceLog ?? null };
+  });
+  const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(), deviceClock: clock, userAgent: navigator.userAgent,
     screenSettings: { device: state.device, diagnosticsMode: state.diagnosticsMode, tokenizerFormat: state.tokenizerFormat, modelExecution: state.modelExecution,
-      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats },
+      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats,
+      repeatDelay: state.repeatDelay ?? 0 },
     active: state.active, results, series: seriesSummary(results, state.active),
     memoryNote: 'Logical allocation counters are not process RSS. Device logs are needed to confirm termination causes.',
     runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });

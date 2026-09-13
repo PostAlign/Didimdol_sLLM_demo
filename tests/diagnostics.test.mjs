@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock } from '../web/sllm/diagnostics.js';
 
 test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
   const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
@@ -255,4 +255,17 @@ test('error text keeps the message when a JavaScriptCore stack omits it', () => 
   assert.equal(errorText(v8), v8.stack, 'a stack that already carries the message is stored once');
   assert.equal(errorText(Object.assign(new Error('no stack'), { stack: undefined })), 'no stack');
   assert.equal(errorText('plain'), 'plain');
+});
+
+test('local timestamps match device log clocks and summaries expose the last record time', () => {
+  // 2026-09-13T07:31:04.759Z, the last 2c record of the September 13 export, on a KST phone.
+  assert.equal(localTimestamp(1789284664759, -540), '2026-09-13 16:31:04.759 +09:00');
+  assert.equal(localTimestamp(1789284664759, 0), '2026-09-13 07:31:04.759 +00:00');
+  assert.equal(localTimestamp(1789284664759, 300), '2026-09-13 02:31:04.759 -05:00');
+  assert.equal(localTimestamp(null), null);
+  const clock = deviceClock(new Date(1789284664759));
+  assert.equal(typeof clock.timezoneOffsetMinutes, 'number');
+  assert.equal(clock.exportedAtLocal, localTimestamp(1789284664759, clock.timezoneOffsetMinutes));
+  assert.equal(diagnosticSummary({ last: { stage: 'gpu-wait', timestamp: 1789284664759 } }).lastRecordAt, 1789284664759);
+  assert.equal(diagnosticSummary({ last: {} }).lastRecordAt, null);
 });

@@ -222,3 +222,17 @@ test('sealed loaders record auxiliary ORT sessions and still refuse weight reads
   await assert.rejects(f.loader.load(f.request), /after session creation/);
   await assert.rejects(f.loader.beforeAllocate('W', false), /after session creation/);
 });
+
+test('a loader created after WASM initialization samples the inherited heap before its first weight read', async () => {
+  const manifest = { initializers: [], totalExternalTensorBytes: 0 };
+  const records = [];
+  const heap = new Uint8Array(24 * 2 ** 20);
+  const loader = new SessionRangeLoader({ manifest, stagingMiB: 2, getHeap: () => heap, checkpoint: async record => { records.push(record); } });
+  await loader.phase('ort-session-start');
+  await loader.phase('ort-plan-start');
+  assert.deepEqual(records.map(record => [record.stage, record.metrics.wasmHeapBytes]),
+    [['ort-session-start', heap.byteLength], ['ort-plan-start', heap.byteLength]]);
+  const late = new SessionRangeLoader({ manifest, stagingMiB: 2, checkpoint: async record => { records.push(record); } });
+  await late.phase('ort-session-start');
+  assert.equal(records.at(-1).metrics.wasmHeapBytes, 0, 'without an accessor the heap stays unmeasured rather than invented');
+});

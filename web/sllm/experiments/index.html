@@ -25,6 +25,7 @@
 <label>토크나이저 로더 <select id="tokenizerFormat" disabled><option value="json">기존 JSON (기본)</option><option value="prepared">미리 변환한 데이터 (비교용)</option></select></label>
 <label>2c 세션 유지 관찰 <select id="sessionIdle" disabled><option value="0">관찰 없이 종료 (기본)</option><option value="120">생성 후 120초 유지</option></select></label>
 <label>상주·세션·전체 로드 반복 <select id="repeats" disabled><option value="1">1회</option><option value="3">3회</option></select></label>
+<label>반복 사이 대기 <select id="repeatDelay" disabled><option value="0">대기 없음 (기본)</option><option value="10">10초</option><option value="30">30초</option></select></label>
 <label>검사기 연결 <select id="inspector" disabled><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
 <p>기존 방식의 GPU 가중치는 약 1,023 MiB입니다. 순차 로딩은 2c와 전체 모델 실험에 적용되며 가중치 약 423 MiB와 2 MiB 전송 버퍼를 사용합니다. 토큰마다 가중치를 다시 읽으므로 생성 속도가 느려질 수 있습니다. 연산 임시 메모리는 별도입니다.</p>
 <p>상주 실험은 ORT 세션을 생성하지 않습니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
@@ -32,11 +33,12 @@
 <p>토크나이저 실험은 전체 로드와 같은 토크나이저를 준비하며 모델 가중치는 적재하지 않습니다. 전체 로드는 토크나이저 준비 후 가중치를 적재합니다.</p>
 <p>결과 표와 기기 정보는 이 브라우저에 남아 탭을 닫아도 유지되며, 최근 결과가 위에 표시됩니다. 실험은 한 번에 한 탭에서만 실행하세요. 추론 중에는 0.5초 간격으로 GPU 요청량·파이프라인 수·WASM heap이 바뀔 때마다 기록되어, 첫 추론 중 종료 시 마지막 샘플이 남습니다.</p>
 <p>실험 시작 버튼을 누르면 실행을 위해 페이지가 한 번 다시 열립니다. 2c의 120초 관찰은 추론 없이 세션을 유지하며, 생성 완료와 관찰 완료를 따로 기록합니다. 토크나이저 비교는 같은 설정에서 기존 JSON과 미리 변환한 데이터를 번갈아 실행하세요.</p>
+<p>중단 원인은 기기 로그로만 확정할 수 있습니다. 실험 전에 설정 → 개인정보 보호 및 보안 → 분석 및 향상에서 iPhone 분석 공유를 켜 두고, 중단 뒤에는 같은 화면의 분석 데이터에서 그 시각의 <code>JetsamEvent-…ips</code> 또는 <code>com.apple.WebKit.WebContent</code> 파일을 찾아 각 행의 기기 로그 메모에 파일명·reason·풋프린트를 적어 두세요. 파일 시각은 기기 현지 시각이며, 표의 기기 로그 칸과 내보내기의 <code>*Local</code> 필드가 같은 기준으로 적혀 있습니다. 반복 사이 대기는 연속 실행이 결과에 영향을 주는지 비교할 때 사용합니다.</p>
 <p>메모리 비교는 같은 전송 크기에서 1b·1c와 2c·3을 각각 비교하세요. 1c는 토크나이저를 유지한 채 전체 가중치를 검증합니다. 2c는 전체 모델 세션만 준비하며 추론 준비 완료를 뜻하지 않습니다. 각 항목은 3회 반복할 수 있고, 중단 뒤에는 자동 재시도하지 않습니다.</p>
 <p><button id="start" disabled>실험 시작</button><button id="stop" disabled>중단</button><button id="export" disabled>진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>
 <p>같은 기기·릴리스·런타임에서 전송 크기와 캐시 조건을 비교해 주세요. GPU 계측이 부분 관측이면 전체 할당 이력을 확인할 수 없습니다.</p>
-<div style="overflow-x:auto"><table style="min-width:1400px"><thead><tr><th>실험·설정</th><th>검증 결과</th><th>실행 횟수</th><th>관찰 / 요청 시간</th><th>기기·검사기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전체 GPU 요청 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div style="overflow-x:auto"><table style="min-width:1400px"><thead><tr><th>실험·설정</th><th>검증 결과</th><th>실행 횟수</th><th>관찰 / 요청 시간</th><th>기기·검사기</th><th>릴리스</th><th>캐시 사용 / 전체</th><th>완료 가중치 / 전체</th><th>GPU 가중치 MiB</th><th>전체 GPU 요청 MiB</th><th>전송 반환 / 완료 MiB</th><th>마지막 위치</th><th>GPU 계측</th><th>시간</th><th>기기 로그</th></tr></thead><tbody id="rows"></tbody></table></div>
 <pre id="last"></pre>
 <p><a id="evaluationLink" href="../../../index.html">선택한 설정으로 평가 화면 열기</a> · <a href="./baseline.html">이전 파일 크기 비교 실험</a></p>
 <script type="module" src="./bootstrap.js"></script></html>

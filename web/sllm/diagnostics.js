@@ -115,6 +115,24 @@ export function inferenceContext(record) {
   return phase ? { phase, row: record.row ?? null, reason: null, inferenceElapsedMs: 0 } : null;
 }
 
+/** Local wall-clock text for an epoch-millisecond timestamp: `YYYY-MM-DD HH:mm:ss.SSS +HH:MM`. */
+export function localTimestamp(ms, offsetMinutes) {
+  if (!Number.isFinite(ms)) return null;
+  const offset = Number.isFinite(offsetMinutes) ? offsetMinutes : new Date(ms).getTimezoneOffset();
+  const shifted = new Date(ms - offset * 60000).toISOString();
+  const sign = offset <= 0 ? '+' : '-', abs = Math.abs(offset);
+  return `${shifted.slice(0, 10)} ${shifted.slice(11, 23)} ${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+/** Device clock facts for matching exports against JetsamEvent/crash files, which are named and stamped in device local time. */
+export function deviceClock(now = new Date()) {
+  let timeZone = null;
+  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null; } catch { /* unavailable */ }
+  return { timeZone, timezoneOffsetMinutes: now.getTimezoneOffset(),
+    exportedAtLocal: localTimestamp(now.getTime(), now.getTimezoneOffset()),
+    note: 'Run timestamps are epoch milliseconds (UTC). JetsamEvent-*.ips names and bodies use the device local clock; compare them with the *Local fields.' };
+}
+
 /** Navigation type of the page observing a recovery (reload, navigate, back_forward) when the browser exposes it. */
 export function pageNavigationType() {
   try { return globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type ?? null; } catch { return null; }
@@ -196,6 +214,7 @@ export function diagnosticSummary(run, sessionFallback = null) {
     unloadEvidence: run.recovery?.unloadEvidence ?? null, reentryGapMs: run.recovery?.reentryGapMs ?? null,
     navigationType: run.recovery?.navigationType ?? null,
     jsMemory: last.jsMemory ?? null,
+    lastRecordAt: last.timestamp ?? null,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
     destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
     loadedInitializerCount: metrics.loadedInitializerCount ?? progress.loadedInitializerCount ?? run.summary?.loadedInitializerCount ?? null,

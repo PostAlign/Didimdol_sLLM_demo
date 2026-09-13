@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat, describeDevice } from '../web/sllm/experiments/results.js';
+import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat, describeDevice, runContext, parseDeviceLogNote } from '../web/sllm/experiments/results.js';
 
 test('the device description carries OS and browser versions from the user agent', () => {
   const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/153.0.8010.24 Mobile/15E148 Safari/604.1';
@@ -106,4 +106,37 @@ test('repeat counts track experiments rather than load, probe and evaluation sub
   assert.equal(series.startedRuns, 3);
   assert.equal(series.successfulRuns, 1);
   assert.deepEqual(series.runIds, ['a', 'b', 'c']);
+});
+
+test('run context counts results since the last interruption and measures the gap from the previous run', () => {
+  assert.deepEqual(runContext([], 1000), { resultsSinceInterruption: 0, gapSincePreviousMs: null, previous: null });
+  const results = [
+    { kind: 'load', modelExecution: 'resident', success: false, interrupted: true, startedAt: 0, durationMs: null },
+    { kind: 'session-only', modelExecution: 'streamed', success: true, interrupted: false, startedAt: 100, durationMs: 50,
+      comparison: { gpuRequestedCurrent: 7, gpuWeightAllocated: 5 } },
+    { kind: 'warm-load', modelExecution: 'resident', success: true, interrupted: false, startedAt: 200, endedAt: 260 },
+  ];
+  const context = runContext(results, 1000);
+  assert.equal(context.resultsSinceInterruption, 2);
+  assert.equal(context.gapSincePreviousMs, 740);
+  assert.deepEqual(context.previous, { kind: 'warm-load', modelExecution: 'resident', success: true, interrupted: false, endedAt: 260,
+    gpuRequestedCurrent: null, gpuWeightAllocated: null });
+  const older = runContext(results.slice(0, 2), 1000);
+  assert.equal(older.gapSincePreviousMs, 850, 'old rows without endedAt fall back to start plus duration');
+  assert.equal(older.previous.gpuRequestedCurrent, 7);
+  assert.equal(runContext(results.slice(0, 1), 1000).resultsSinceInterruption, 0);
+  assert.equal(runContext(results.slice(0, 1), 1000).gapSincePreviousMs, null, 'an interrupted row has no known end');
+});
+
+test('device log notes keep the text and extract the file, reason and footprint when present', () => {
+  assert.equal(parseDeviceLogNote(''), null);
+  assert.equal(parseDeviceLogNote('   '), null);
+  const note = parseDeviceLogNote('JetsamEvent-2026-09-13-163104.ips · per-process-limit · 1,024 MiB');
+  assert.deepEqual(note, { note: 'JetsamEvent-2026-09-13-163104.ips · per-process-limit · 1,024 MiB',
+    file: 'JetsamEvent-2026-09-13-163104.ips', reason: 'per-process-limit', footprintMiB: 1024 });
+  assert.equal(parseDeviceLogNote('com.apple.WebKit.WebContent 1.5 GB vm-pageshortage').footprintMiB, 1430.5);
+  assert.equal(parseDeviceLogNote('rpages 65,536 highwater').footprintMiB, 1024);
+  assert.equal(parseDeviceLogNote('"rpages": 32768').footprintMiB, 512);
+  assert.equal(parseDeviceLogNote('65536 pages').footprintMiB, 1024);
+  assert.deepEqual(parseDeviceLogNote('no file found in Analytics Data'), { note: 'no file found in Analytics Data', file: null, reason: null, footprintMiB: null });
 });

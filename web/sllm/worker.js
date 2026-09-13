@@ -356,12 +356,15 @@ async function loadStreamedSession(timings, loadOrder) {
     stagingMiB: 2, timings: { ...timings }, storage: { ...weightStore.metrics } });
   const modelStarted = performance.now();
   // The head has dynamic weights and no external initializers. Create it once.
-  globalThis.__ortExternalTensorLoader = { closed: true, phase: async stage => {
+  // WASM initializes during this first session, so the bridge hands the heap
+  // accessor to this placeholder; the body loader inherits it below.
+  const headBridge = { closed: true, getHeap: null, phase: async stage => {
     await journal.checkpoint({ stage: 'streamed-head-create', componentPhase: stage });
   } };
+  globalThis.__ortExternalTensorLoader = headBridge;
   const head = await ort.InferenceSession.create(headGraph, options);
   pendingStreamedSessions.push(head);
-  const loader = new SessionRangeLoader({ manifest, stagingMiB: 2, signal: loadController.signal,
+  const loader = new SessionRangeLoader({ manifest, stagingMiB: 2, signal: loadController.signal, getHeap: headBridge.getHeap,
     gpuTracker: trackedGpu, storage: () => weightStore.metrics, checkpoint: record => journal.checkpoint(record) });
   globalThis.__ortExternalTensorLoader = loader;
   let success = false;

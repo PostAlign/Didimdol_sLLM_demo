@@ -96,3 +96,44 @@ export function seriesSummary(results, active = null) {
   }
   return [...groups.values()];
 }
+
+/**
+ * What the page knows about the runs before this one. A process kill cannot be
+ * observed directly, so the count of results appended since the last interrupted
+ * row and the gap since the previous run ended are the closest proxies for
+ * "how much this renderer process has already done". Results are durable
+ * across tabs and browser restarts; the gap says whether the previous run was
+ * moments ago or long before.
+ */
+export function runContext(results = [], now = Date.now()) {
+  const previous = results.at(-1) ?? null;
+  let resultsSinceInterruption = 0;
+  for (let i = results.length - 1; i >= 0 && !results[i].interrupted; i--) resultsSinceInterruption++;
+  const endedAt = previous?.endedAt ?? (Number.isFinite(previous?.startedAt) && Number.isFinite(previous?.durationMs)
+    ? previous.startedAt + previous.durationMs : null);
+  return { resultsSinceInterruption,
+    gapSincePreviousMs: endedAt == null ? null : Math.max(0, now - endedAt),
+    previous: previous ? { kind: previous.kind ?? null, modelExecution: previous.modelExecution ?? null,
+      success: previous.success ?? null, interrupted: previous.interrupted ?? false, endedAt,
+      gpuRequestedCurrent: previous.comparison?.gpuRequestedCurrent ?? null,
+      gpuWeightAllocated: previous.comparison?.gpuWeightAllocated ?? null } : null };
+}
+
+/** Free-text device log note ("JetsamEvent-2026-09-13-163104.ips · per-process-limit · 1,024 MiB") with the parts the analysis needs. */
+export function parseDeviceLogNote(note) {
+  const text = String(note ?? '').trim();
+  if (!text) return null;
+  const file = /[\w.-]*\.ips\b/i.exec(text)?.[0] ?? null;
+  const reason = /per-process-limit|vm-pageshortage|highwater|fc-thrashing|jettisoned|memory limit|EXC_RESOURCE/i.exec(text)?.[0]?.toLowerCase() ?? null;
+  const size = /(\d+(?:,\d{3})*(?:\.\d+)?)\s*(MiB|MB|GiB|GB)\b/i.exec(text);
+  let footprintMiB = null;
+  if (size) {
+    const value = Number(size[1].replace(/,/g, ''));
+    footprintMiB = { mib: value, mb: value * 1e6 / 2 ** 20, gib: value * 1024, gb: value * 1e9 / 2 ** 20 }[size[2].toLowerCase()];
+  } else {
+    // JetsamEvent bodies write `"rpages": 65536`; a hand-written note may put the number first. 16 KiB pages.
+    const pages = /(\d+(?:,\d{3})*)\s*(?:rpages|pages)\b/i.exec(text) || /rpages\D{0,4}(\d+(?:,\d{3})*)/i.exec(text);
+    if (pages) footprintMiB = Number(pages[1].replace(/,/g, '')) * 16384 / 2 ** 20;
+  }
+  return { note: text, file, reason, footprintMiB: footprintMiB == null ? null : Math.round(footprintMiB * 10) / 10 };
+}

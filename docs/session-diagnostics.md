@@ -113,6 +113,101 @@ FP32 model weights, tokenizer, generation settings, evaluation inputs and graph
 optimization settings are unchanged. Native changes add lifecycle checkpoints;
 they do not change buffer allocation, packing or execution policy.
 
+## September 13 evening exports (release `963a5d7bbf22`, commit `925de82`)
+
+Same iPhone, same settings, nine OPFS cache hits in every run, no persisted GPU
+fault, no device loss. Six runs were interrupted; every one recorded
+`no-unload-event`, `navigationType: back_forward` and a re-entry gap between
+0.4 s and 4.2 s. The experiment page was exported after each run
+(`iphone-fp32-experiments (35)`–`(45)`), the evaluation page once
+(`didimdol-diagnostics (9)`).
+
+| UTC | Screen / experiment | Outcome |
+|---|---|---|
+| 07:20:30 | Evaluation page session create | 251/251, `ready` in 15.3 s |
+| 07:20:30 | Evaluation page warmup (sampled, 4 tokens) | complete in 1.5 s, one auxiliary `top_k` session, peak 1,069 MiB requested |
+| 07:20:32 | Evaluation page row 1 (sampled) | interrupted 0.6 s after the first token, 1,063 MiB requested, page back after 1.3 s |
+| 07:21:08-07:24:34 | 1, 1b, 1c, 1d, small runtime 120 s, 2b | all complete |
+| 07:31:04 | 2c session-only, resident | interrupted at 225/251 (`embed_tokens.chunk3`, 4 of 5 staging pieces), 988 MiB allocated, page back after 1.6 s |
+| 07:31:39 | 2c session-only, streamed | complete, 423 MiB, 6.7 s |
+| 07:32:24 | 3 full load, resident | 251/251, `ready` in 9.3 s |
+| 07:32:55 | 3 full load, streamed | 235/235, `ready` in 6.8 s |
+| 07:33:37 | 4 cached load 1/5, resident | 251/251, `ready` in 9.5 s |
+| 07:33:49 | 4 cached load 2/5, resident | interrupted at 209/251 (`onnx::MatMul_7184`, `range-read`), 917 MiB, page back after 0.8 s |
+| 07:34:18, 07:34:26 | 4 cached load 1/5, 2/5, streamed | both `ready` (6.5 s, 7.7 s) |
+| 07:34:30 | 4 cached load 3/5, streamed | **interrupted at `ort-plan-start` with no weights loaded**, 0 MiB GPU, page back after 4.2 s |
+| 07:35:14 | 5 short inference, resident 8 MiB | load 251/251 `ready` in 9.1 s, interrupted within 0.4 s of `probe-inference-start` |
+| 07:35:50 | 5 short inference, resident 2 MiB | load 251/251 `ready` in 9.3 s, interrupted within 0.8 s of `probe-inference-start` |
+| 07:36:57 | 5 short inference, streamed | complete in 41.4 s, peak 498 MiB requested |
+
+2c and the successful 3 load were compared directly: 2c's 226-entry initializer
+order is a prefix of the 251-entry order (so is the interrupted cached load's
+210), the first 225 initializers (948 MiB) uploaded in 2.28 s against 2.24 s and
+2.14 s for the successful loads, and 2c's ORT phases (session start to plan,
+plan to initializers) were no slower. 2c reached the same initializer 1.4 s
+later only because its pre-ORT preparation was slower (evaluation input 808 ms
+against 7 ms, graph 2.4 s). The cleanup of every preceding run had succeeded
+with zero live buffers. Nothing distinguishes 2c's code path from the load that
+survived; this is the third session in a row (207, 214, 225 of 251) in which 2c
+was interrupted and 3 completed.
+
+Resident inference did not survive in this session: the evaluation warmup
+needed 47 MiB above the 1,023 MiB of weights and finished, row 1 then ended
+after its first token, and both short-inference probes ended before their first
+500 ms sample. The streamed path finished both probes (32 tokens each, 18.1 s
+and 16.7 s, about 1.8 tokens/s, about 670 MB of weights uploaded per token) with
+a 498 MiB peak.
+
+The streamed cached load 3/5 does not fit the resident-limit explanation. It
+ended between `ort-plan-start` and the first initializer, with no GPU weights,
+as the third run in one page with 0.3-0.5 s between runs (the resident cached
+load ended on the second such run). Whether something accumulates inside the
+renderer process across runs cannot be read from exports: `jsMemory` is null
+on iOS, and until this commit the streamed body loader reported a 0-byte WASM
+heap before its first weight read because the ORT bridge had handed the heap
+accessor to the head-session placeholder.
+
+Changes in this commit, all instrumentation and documentation:
+
+- **Streamed WASM heap.** `SessionRangeLoader` accepts `getHeap` at
+  construction; the streamed body loader inherits it from the head placeholder,
+  so `ort-session-start` and `ort-plan-start` records carry the heap size.
+- **Run context.** Each experiment run's `environment.runContext` (also on the
+  result row) records how many results were appended since the last interrupted
+  row, the gap since the previous run ended, and the previous run's kind,
+  execution mode, outcome and GPU request. Rows now store `endedAt` and
+  `lastRecordAt`.
+- **Repeat delay.** The experiment page can wait 0, 10 or 30 s between repeats
+  (`repeatDelaySeconds` in the environment). The wait is shown and can be
+  cancelled with the stop button; nothing is scheduled until it elapses.
+- **Device log correlation.** Both exports carry `deviceClock` (time zone,
+  offset, local export time); experiment results carry `startedAtLocal` and
+  `lastRecordAtLocal`; `diagnosticSummary` exposes `lastRecordAt`. Each result
+  row has a device-log note (file name, `reason`, footprint from MiB/GB or
+  `rpages` × 16 KiB) that is stored with the row and exported as `deviceLog`.
+
+### Collecting the device log
+
+On the phone: Settings → Privacy & Security → Analytics & Improvements →
+Analytics Data lists `JetsamEvent-YYYY-MM-DD-HHMMSS.ips` files (device local
+time). If the list holds no JetsamEvent files, turn on Share iPhone Analytics
+before reproducing. In the file, find `com.apple.WebKit.WebContent` (Chrome on
+iOS runs pages in WKWebView), read its `reason` (`per-process-limit` versus
+`vm-pageshortage`) and `rpages × pageSize`. If there is no JetsamEvent at the
+minute of an interruption but a `com.apple.WebKit.WebContent` crash file exists,
+keep that instead: WebKit's own memory-limit termination is reported there.
+A Mac shows the same files in Xcode's Devices window or Console's Crash
+Reports; a sysdiagnose (both volume buttons and the side button for 1.5 s) adds
+system memory state. The evening interruptions, on a KST phone, ended at
+16:20:32, 16:31:04, 16:33:49, 16:34:30, 16:35:14 and 16:35:50.
+
+Open decisions that wait for that log: whether the evaluation page's iOS
+default should become `modelExecution=streamed` (resident inference completed
+0 of 3 attempts here, streamed 1 of 1), and whether the streamed cached load
+3/5 recurs with a 30 s repeat delay. The acceptance run for the streamed path
+is two 100-row evaluations; at about 17 s per row each pass takes close to
+30 minutes on this device.
+
 ## Experiment 1d: small ORT session plus stored-weight residency
 
 `runtime-resident` runs through the application worker, under the same origin

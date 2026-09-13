@@ -6,9 +6,14 @@ export const STAGING_MIB = [2, 4, 8, 16, 32, 64];
 /** Called inside OrtCreateSession by the patched EM_ASYNC_JS bridge. */
 export class SessionRangeLoader {
   constructor({ manifest, stagingMiB = 8, checkpoint = async () => {}, emit = () => {}, maxCpuTensorBytes = 65536, signal,
-    gpuLedger = () => null, gpuTracker = null, weightRole = 'weight', storage = () => null, clock = () => performance.now() }) {
+    gpuLedger = () => null, gpuTracker = null, weightRole = 'weight', storage = () => null, clock = () => performance.now(), getHeap = null }) {
     if (!STAGING_MIB.includes(stagingMiB)) throw new RangeError('stagingMiB must be 2, 4, 8, 16, 32 or 64');
     this.stagingBytes = stagingMiB * 2 ** 20;
+    // The ORT bridge assigns `getHeap` to whichever loader is installed when WASM
+    // initializes. A loader installed later (the streamed body after the head
+    // session) receives it here so `ort-session-start`/`ort-plan-start` records
+    // carry the WASM heap instead of 0 until the first weight read.
+    this.getHeap = getHeap;
     this.checkpoint = checkpoint;
     this.emit = emit;
     this.signal = signal;
@@ -107,7 +112,7 @@ export class SessionRangeLoader {
   }
   async load({ location, file, offset, length, target, loadType, gpu, getHeap }) {
     this.check();
-    this.getHeap = getHeap;
+    if (getHeap) this.getHeap = getHeap;
     if (this.closed) throw new Error('External weights cannot be read after session creation');
     if (this.busy) throw new Error('Concurrent initializer loads would exceed the staging budget');
     const ranged = file?.ortRangeSource === 2;
