@@ -1,3 +1,5 @@
+import { inferenceDigest } from './session-observation.js';
+
 const DB = 'didimdol-runtime-diagnostics';
 const STORE = 'runs';
 let connection;
@@ -94,16 +96,31 @@ export const gpuOperationContext = record => ({ observedDuring: record?.stage,
   ...Object.fromEntries(['initializerName', 'shape', 'index', 'offset', 'length', 'location',
     'fileOffset', 'destinationOffset', 'chunkBytes'].filter(key => record?.[key] !== undefined).map(key => [key, record[key]])) });
 
+// Records that place an interruption inside a generate() call. `-complete`
+// records are deliberately absent: after them the worker is between inferences.
+const INFERENCE_START = { 'warmup-start': 'warmup', 'row-start': 'evaluation', 'probe-inference-start': 'probe' };
+export function inferenceContext(record) {
+  if (!record?.stage) return null;
+  if (record.stage === 'inference-sample') return { phase: record.phase ?? null, row: record.row ?? null,
+    reason: record.reason ?? null, inferenceElapsedMs: record.inferenceElapsedMs ?? null };
+  const phase = INFERENCE_START[record.stage];
+  return phase ? { phase, row: record.row ?? null, reason: null, inferenceElapsedMs: 0 } : null;
+}
+
 export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
   const { lifecycle = [], ...details } = context;
   const startedAt = run.startedAt ?? run.milestones?.['load-start']?.timestamp;
   const cleanupPending = run.cleanup?.stage === 'cleanup-start' || (context.phase === 'cleanup' && !run.cleanup);
-  const sessionCreated = !!run.milestones?.['session-create-complete'] || run.summary?.modelSessionCreated === true;
+  // Evaluation/probe runs are separate journals that only start with a created session.
+  const sessionCreated = !!run.milestones?.['session-create-complete'] || run.summary?.modelSessionCreated === true ||
+    !!run.milestones?.['run-start'] || !!run.milestones?.['probe-start'];
+  const inference = run.status === 'running' && !cleanupPending ? inferenceContext(run.last) : null;
   const completed = ['complete', 'ready'].includes(run.status);
   const terminalReentry = run.status === 'cancelled' ? 'cancelled-run-reentry' : run.status === 'failed' ? 'failed-run-reentry' : null;
   return { ...details, observedAt, priorStatus: run.status, lastTimestamp: run.last?.timestamp ?? null,
     classification: run.fault ? 'known-fault' : cleanupPending ? 'cleanup-reentry' : completed ? 'completed-run-reentry' : terminalReentry || 'interrupted',
-    interruptedPhase: cleanupPending ? 'cleanup' : run.status === 'running' ? (sessionCreated ? 'after-session-create' : 'execution') : null,
+    interruptedPhase: cleanupPending ? 'cleanup' : run.status === 'running' ? (inference ? 'inference' : sessionCreated ? 'after-session-create' : 'execution') : null,
+    inference,
     cause: run.fault ? 'recorded-fault' : 'unknown',
     // Retain historical hints, but only associate events inside this run's time
     // interval and, for new records, with its explicit UUID.
@@ -128,7 +145,12 @@ export function diagnosticSummary(run, sessionFallback = null) {
   const storage = last.storage ?? session?.storage
     ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
     ?? run.milestones?.['weights-prepared']?.storage ?? null;
+  const recent = [last, ...(run.records || []).slice().reverse()];
   return { effectiveStatus: fault || run.cleanup?.success === false || run.cleanupError ? 'failed' : interrupted ? 'interrupted' : run.status,
+    interruptedPhase: run.recovery?.interruptedPhase ?? null, interruptedInference: run.recovery?.inference ?? null,
+    // Last sample taken inside a generate() call, and the summary of the last generate() that finished.
+    inference: inferenceDigest(recent.find(record => record.stage === 'inference-sample') ?? null),
+    lastInference: recent.find(record => record.inference)?.inference ?? run.summary?.inference ?? null,
     modelExecution: run.environment?.modelExecution ?? session?.modelExecution ?? null,
     streaming: [last, ...(run.records || []).slice().reverse()].find(record => record.streaming)?.streaming ?? session?.streaming ?? null,
     file: fault?.file ?? last.file ?? null, observedDuring: fault?.observedDuring ?? last.observedDuring ?? null,

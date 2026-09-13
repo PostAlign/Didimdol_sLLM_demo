@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>iPhone FP32 실행 진단</title>
-<style>body{font:16px system-ui;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.6}input,select,button{font:inherit;padding:8px;margin:6px 0;max-width:100%;box-sizing:border-box}input{width:100%}button{margin-right:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #ddd}table{width:100%}</style>
+<style>body{font:16px system-ui;max-width:960px;margin:24px auto;padding:0 16px;line-height:1.6}input,select,button{font:inherit;padding:8px;margin:6px 0;max-width:100%;box-sizing:border-box}input{width:100%}button{margin-right:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #ddd}table{width:100%}tr.interrupted td{background:#fff3f0}</style>
 <h1>iPhone FP32 실행 진단</h1>
 <p>실험마다 새 페이지에서 시작합니다. 페이지가 예기치 않게 다시 열리면 중단된 기록을 표시하며 자동 재시도하지 않습니다. 모델 정밀도는 FP32입니다.</p>
 <label>기기·OS·브라우저 버전 <input id="device" disabled placeholder="예: iPhone 14 Pro Max / iOS 26.4.2 / Chrome 버전"></label>
@@ -30,6 +30,7 @@
 <p>상주 실험은 ORT 세션을 생성하지 않습니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
 <p>1d는 작은 모델 세션을 유지하면서 같은 GPU 장치에 전체 가중치를 올려 검증합니다. 작은 모델의 추가 자원은 별도 기록되며, 전체 모델 추론 성공을 뜻하지 않습니다.</p>
 <p>토크나이저 실험은 전체 로드와 같은 토크나이저를 준비하며 모델 가중치는 적재하지 않습니다. 전체 로드는 토크나이저 준비 후 가중치를 적재합니다.</p>
+<p>결과 표와 기기 정보는 이 브라우저에 남아 탭을 닫아도 유지되며, 최근 결과가 위에 표시됩니다. 실험은 한 번에 한 탭에서만 실행하세요. 추론 중에는 0.5초 간격으로 GPU 요청량·파이프라인 수·WASM heap이 바뀔 때마다 기록되어, 첫 추론 중 종료 시 마지막 샘플이 남습니다.</p>
 <p>실험 시작 버튼을 누르면 실행을 위해 페이지가 한 번 다시 열립니다. 2c의 120초 관찰은 추론 없이 세션을 유지하며, 생성 완료와 관찰 완료를 따로 기록합니다. 토크나이저 비교는 같은 설정에서 기존 JSON과 미리 변환한 데이터를 번갈아 실행하세요.</p>
 <p>메모리 비교는 같은 전송 크기에서 1b·1c와 2c·3을 각각 비교하세요. 1c는 토크나이저를 유지한 채 전체 가중치를 검증합니다. 2c는 전체 모델 세션만 준비하며 추론 준비 완료를 뜻하지 않습니다. 각 항목은 3회 반복할 수 있고, 중단 뒤에는 자동 재시도하지 않습니다.</p>
 <p><button id="start" disabled>실험 시작</button><button id="stop" disabled>중단</button><button id="export" disabled>진단 JSON 저장</button></p>

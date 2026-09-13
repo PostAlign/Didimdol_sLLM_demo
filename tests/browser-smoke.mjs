@@ -161,7 +161,7 @@ try {
     assert.equal(await page.locator('#staging').isDisabled(), true);
     await page.locator('#start').click();
     await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
-    const stored = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')));
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')));
     const result = stored.results.at(-1);
     assert.equal(result.navigation.reason, 'experiment-start');
     assert.equal(result.navigation.runId, result.runId);
@@ -193,7 +193,7 @@ try {
     }, result.runId);
     await page.reload();
     await page.locator('#status').getByText('이전 실험 완료 기록을 복구했습니다.').waitFor();
-    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1).success), true);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1).success), true);
     await page.evaluate(async () => {
       const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
       const { RunDiagnostics } = await import(asset('web/sllm/diagnostics.js'));
@@ -205,7 +205,7 @@ try {
     });
     await page.reload();
     await page.locator('#status').getByText('이전 실험 기록을 복구했습니다. 진단 JSON을 저장해 주세요.').waitFor();
-    const recovered = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    const recovered = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(recovered.interrupted, true);
     assert.equal(recovered.success, false);
     assert.equal(recovered.comparison.file, 'tokenizer.json');
@@ -218,7 +218,7 @@ try {
     await page.locator('#start').click();
     await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
     const snapshot = await page.evaluate(async () => {
-      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
       const { readRun } = await import('/web/sllm/diagnostics.js');
       return readRun(state.results.at(-1).runId);
     });
@@ -232,7 +232,7 @@ try {
     await page.locator('#start').click();
     await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
     const prepared = await page.evaluate(async () => {
-      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
       return (await import('/web/sllm/diagnostics.js')).readRun(state.results.at(-1).runId);
     });
     assert.equal(prepared.summary.tokenizer.tokenizerFormat, 'prepared');
@@ -263,7 +263,7 @@ try {
     });
     await page.reload();
     await page.locator('#rows').getByText('자원 정리 중 재진입 · 정리 완료 미확인').waitFor();
-    const cleanupRecovery = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    const cleanupRecovery = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(cleanupRecovery.interrupted, true);
     assert.equal(cleanupRecovery.success, false);
     assert.equal(cleanupRecovery.execution.modelSessionCreated, true);
@@ -289,13 +289,13 @@ try {
     await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 10000 });
     releaseTokenRead();
     const cancelled = await page.evaluate(async () => {
-      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
       return (await import('/web/sllm/diagnostics.js')).readRun(state.results.at(-1).runId);
     });
     assert.equal(cancelled.status, 'cancelled');
     assert.equal(cancelled.cleanup.success, true);
     await page.reload();
-    const stopResult = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    const stopResult = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(stopResult.cancelled, true);
     assert.notEqual(stopResult.interrupted, true);
     results.push({ id: 'snapshot-and-cooperative-cancel', success: true });
@@ -390,14 +390,15 @@ try {
       await page.locator('#repeats').selectOption('1');
       if (kind === 'session-only') await page.locator('#sessionIdle').selectOption(process.env.TEST_SESSION_IDLE || '0');
       requests.length = 0;
-      const priorCount = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2') || '{}').results?.length || 0);
+      const priorCount = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3') || '{}').results?.length || 0);
       await page.locator('#start').click();
       await page.waitForFunction(priorCount => {
-        const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
-        return !state.active && state.results.length > priorCount;
+        const tab = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2') || '{}');
+        const durable = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3') || '{"results":[]}');
+        return !tab.active && durable.results.length > priorCount;
       }, priorCount, { timeout: 600000 });
       const exported = await page.evaluate(async () => {
-        const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+        const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
         const result = state.results.at(-1);
         const { asset } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
         const { readRun } = await import(asset('web/sllm/diagnostics.js'));
@@ -446,7 +447,7 @@ try {
       requests.length = 0;
       await page.reload();
       await page.locator('#status').getByText('이전 실험 완료 기록을 복구했습니다.').waitFor();
-      const recovered = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+      const recovered = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
       assert.equal(recovered.success, true);
       assert.equal(recovered.execution.completedScope, comparison.execution.completedScope);
       assert.equal(requests.some(url => /\.wasm$|\/tokenizer\/tokenizer.json$/.test(url)), false, 'recovery must not start a new worker');
@@ -472,7 +473,7 @@ try {
         await page.locator('#stop').click();
         await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 15000 });
         const stopped = await page.evaluate(async () => {
-          const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+          const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
           const result = state.results.at(-1);
           return { result, run: await (await import('/web/sllm/diagnostics.js')).readRun(result.runId) };
         });
@@ -748,7 +749,7 @@ try {
   await page.locator('#status').getByText('실험 실패 · 진단 JSON을 저장해 주세요.').waitFor();
   assert.match(await page.locator('#last').innerText(), /저장된 가중치가 없습니다/);
   assert.deepEqual(modelRequests, []);
-  const missingCache = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+  const missingCache = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
   assert.equal(missingCache.execution.runtimeMode, null);
   assert.equal(missingCache.execution.idleRequestedSeconds, 0);
   assert.equal(missingCache.requestedRuns, 1);
@@ -773,7 +774,18 @@ try {
   await page.locator('#status').getByText('예정된 페이지 이동을 확인하지 못해 자동 실행을 중단했습니다.', { exact: false }).waitFor();
   assert.deepEqual(modelRequests, []);
   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).continue), null);
-  results.push({ id: 'diagnostic-ui', success: true, tabIsolation: true, recoveryVerified: true, stopExportVerified: true });
+  // Results outlive the tab; live progress does not leak into a fresh tab.
+  const freshTab = await page.context().newPage();
+  await freshTab.goto(`${origin}/web/sllm/experiments/index.html`);
+  await freshTab.locator('#kind').waitFor();
+  const durable = await freshTab.evaluate(() => ({
+    results: JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.length,
+    tab: JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2') || 'null') }));
+  assert.ok(durable.results > 0, 'a new tab lists the stored results');
+  assert.equal(durable.tab?.active ?? null, null);
+  assert.match(await freshTab.locator('#rows').innerText(), /resident-opfs/);
+  await freshTab.close();
+  results.push({ id: 'diagnostic-ui', success: true, tabIsolation: true, recoveryVerified: true, stopExportVerified: true, durableResults: durable.results });
 } finally {
   await mkdir(path.join(root, 'test-results'), { recursive: true });
   await writeFile(path.join(root, 'test-results/browser-smoke.json'), JSON.stringify(results, null, 2));

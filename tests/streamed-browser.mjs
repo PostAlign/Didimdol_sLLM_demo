@@ -72,7 +72,11 @@ try {
             clearTimeout(timeout); clearInterval(progress); worker.terminate();
             const { readRun } = await import('/web/sllm/diagnostics.js');
             const run = await readRun(probeId);
-            resolve({ execution, mode, releaseId: build.releaseId, session, probe, firstProbe, cleanup: data.cleanup, steps: run.records.filter(x => x.stage === 'streamed-step-complete') });
+            resolve({ execution, mode, releaseId: build.releaseId, session, probe, firstProbe, cleanup: data.cleanup, steps: run.records.filter(x => x.stage === 'streamed-step-complete'),
+              samples: run.records.filter(x => x.stage === 'inference-sample').map(({ reason, phase, row, inferenceElapsedMs, sampleIndex, gpuLedger, metrics }) =>
+                ({ reason, phase, row, inferenceElapsedMs, sampleIndex, gpuRequestedCurrent: gpuLedger?.requestedCurrent ?? null,
+                  computePipelines: gpuLedger?.programs?.computePipelines ?? null, wasmHeapBytes: metrics?.wasmHeapBytes ?? null })),
+              inferences: run.records.filter(x => x.inference).map(x => ({ stage: x.stage, row: x.row, ...x.inference })) });
           }
         };
       });
@@ -80,6 +84,16 @@ try {
     results.push(result);
     assert.equal(result.probe.success, true);
     assert.equal(result.cleanup.success, true);
+    // Every generate() call is sampled: the last probe carries a summary and its first token was marked.
+    assert.ok(result.inferences.length >= 1, 'probe-inference-complete carries the sampling summary');
+    const inference = result.inferences.at(-1);
+    assert.equal(inference.stage, 'probe-inference-complete');
+    assert.equal(inference.phase, 'probe');
+    assert.ok(inference.samples >= 1 && inference.marks >= 1, JSON.stringify(inference));
+    assert.ok(inference.lastSample.gpuRequestedCurrent > 0);
+    assert.ok(result.samples.some(sample => sample.reason === 'first-token'));
+    assert.ok(result.samples.every(sample => sample.phase === 'probe' && sample.sampleIndex >= 1 && sample.gpuRequestedCurrent > 0));
+    console.log(JSON.stringify({ execution, inference, sampleReasons: result.samples.map(sample => sample.reason) }));
     if (execution === 'streamed') {
       assert.equal(result.session.metrics.gpuWeightAllocated, 401304064);
       assert.equal(result.session.streaming.gpuBufferBytes, 41943040);
@@ -121,7 +135,7 @@ try {
       await writeFile(path.join(root, '.work/streamed-ui-failure.json'), JSON.stringify(state, null, 2));
       throw error;
     } finally { clearInterval(progress); }
-    const complete = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    const complete = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(complete.execution.modelExecution, 'streamed');
     assert.equal(complete.stagingMiB, 2);
     assert.equal(complete.comparison.cleanup.success, true);
@@ -131,7 +145,7 @@ try {
     await page.locator('#status').getByText('세션 생성 완료 · 세션을 유지하며 관찰 중…', { exact: true }).waitFor({ timeout: 120000 });
     await page.locator('#stop').click();
     await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 15000 });
-    const cancelled = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    const cancelled = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(cancelled.cancelled, true);
     assert.equal(cancelled.comparison.cleanup.success, true);
     const leaseFree = await page.evaluate(() => navigator.locks.request('didimdol-model-load', { ifAvailable: true }, lock => !!lock));

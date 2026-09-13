@@ -5,6 +5,19 @@ export const isSimpleProbe = kind => kind === 'resident' || kind === 'runtime';
 export const canRepeat = kind => ['resident', 'resident-opfs', 'resident-opfs-tokenizer', 'session-only', 'load', 'runtime-resident'].includes(kind);
 export const applicationOperation = kind => ['tokenizer', 'session-only', 'resident-opfs', 'resident-opfs-tokenizer', 'runtime-resident'].includes(kind) ? kind : 'load';
 
+/** OS and browser versions from the user agent; the tester adds the device model. */
+export function describeDevice(userAgent = '') {
+  const ios = /(?:iPhone|CPU) OS (\d+)_(\d+)(?:_(\d+))?/.exec(userAgent);
+  const android = /Android ([\d.]+)/.exec(userAgent);
+  const family = /iPad/.test(userAgent) ? 'iPad' : /iPhone/.test(userAgent) ? 'iPhone' : android ? 'Android'
+    : /Macintosh/.test(userAgent) ? 'Mac' : /Windows/.test(userAgent) ? 'Windows' : /Linux/.test(userAgent) ? 'Linux' : '';
+  const os = ios ? `iOS ${[ios[1], ios[2], ios[3]].filter(Boolean).join('.')}` : android ? `Android ${android[1]}` : '';
+  const browsers = [[/CriOS\/([\d.]+)/, 'Chrome'], [/FxiOS\/([\d.]+)/, 'Firefox'], [/EdgiOS\/([\d.]+)/, 'Edge'], [/Edg\/([\d.]+)/, 'Edge'],
+    [/Chrome\/([\d.]+)/, 'Chrome'], [/Version\/([\d.]+).*Safari/, 'Safari'], [/Firefox\/([\d.]+)/, 'Firefox']];
+  const browser = browsers.map(([pattern, name]) => { const match = pattern.exec(userAgent); return match && `${name} ${match[1]}`; }).find(Boolean) || '';
+  return [family, os, browser].filter(Boolean).join(' / ');
+}
+
 export function executionSettings(kind, config = {}) {
   return { runtimeMode: isResident(kind) ? null : config.mode || 'asyncify',
     idleSeconds: kind === 'runtime' ? config.idleSeconds ?? 120 : kind === 'session-only' ? config.idleSeconds ?? 0 : 0,

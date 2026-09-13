@@ -215,12 +215,22 @@ export function initSllm(root) {
     const summary = diagnosticSummary(run && { ...run, recovery });
     console.warn('LAST CRASH POSITION (interrupted run; cause unconfirmed)', run);
     const when = new Date(prev.t).toLocaleTimeString('ko-KR');
+    // Distinguish "session created, died in the first inference" from a loading interruption.
+    const inference = recovery?.inference;
+    const activity = recovery?.interruptedPhase === 'inference'
+      ? ({ warmup: '세션 생성 후 워밍업(첫 추론)', evaluation: `세션 생성 후 평가 ${inference?.row ?? '?'}행 추론`,
+        probe: '세션 생성 후 짧은 추론' }[inference?.phase] || '세션 생성 후 추론')
+      : recovery?.interruptedPhase === 'after-session-create' ? '세션 생성 후 대기' : prev.phase === 'run' ? '평가' : '로딩';
+    const sample = summary?.inference;
     addRow(-1, null,
-      `이전 실행 중단 — ${run?.fault ? '오류 기록 있음' : '원인 미확인'}. 지난 ${prev.phase === 'run' ? '평가' : '로딩'}(${when} 시작)가 도중에 끝났습니다. `
+      `이전 실행 중단 — ${run?.fault ? '오류 기록 있음' : '원인 미확인'}. 지난 ${activity}(${when} 시작)이 도중에 끝났습니다. `
       + '페이지 이동·새로고침 또는 브라우저/GPU 종료 가능성이 있으며, 메모리 부족은 아직 확인되지 않았습니다. '
       + '검증·저장이 완료된 가중치 파일은 다시 사용합니다. 진단 기록을 저장해 주세요.'
       + (checkpoint ? ` 마지막 기록: ${summary?.observedDuring || checkpoint.stage} · ${summary?.file || checkpoint.initializerName || ''}` : '')
       + (summary?.gpuWeightAllocated != null ? ` · GPU 가중치 ${mb(summary.gpuWeightAllocated)} · ${summary.loadedInitializerCount ?? '?'}개 완료` : '')
+      + (sample ? ` · 추론 ${((sample.inferenceElapsedMs ?? 0) / 1000).toFixed(1)}초 시점 GPU 요청 ${sample.gpuRequestedCurrent == null ? '미기록' : mb(sample.gpuRequestedCurrent)}`
+        + ` · 파이프라인 ${sample.programs?.computePipelines ?? '?'}개 · WASM heap ${sample.wasmHeapBytes == null ? '미기록' : mb(sample.wasmHeapBytes)}` : '')
+      + (recovery?.interruptedPhase === 'inference' && !sample ? ' · 추론 시작 후 첫 샘플 전에 끝남' : '')
       + (summary ? ` · GPU 계측 ${trackingLabel(summary.trackingStatus)}` : '')
       + (checkpoint?.stage === 'gpu-wait' ? ' · GPU 완료 대기 직전까지 기록됨' : ''));
   }

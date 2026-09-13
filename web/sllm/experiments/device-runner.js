@@ -1,16 +1,16 @@
 import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
-import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary } from './results.js';
+import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice } from './results.js';
+import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
 
 const $ = id => document.getElementById(id);
-const key = 'didimdol.device-experiments.v2';
-let state;
-try { state = JSON.parse(sessionStorage.getItem(key)); } catch {}
-state ||= { results: [], active: null, device: '', mode: 'asyncify' };
-const save = () => sessionStorage.setItem(key, JSON.stringify(state));
+const storages = { local: localStorage, session: sessionStorage };
+const state = loadExperimentState(storages);
+const save = () => saveExperimentState(state, storages);
 let worker, sessionResult, evaluationCount = 0, finishing = false;
 const controlIds = ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
-$('device').value = state.device; $('mode').value = state.mode;
+// Exports without OS/browser versions cannot be compared; the model name is still typed by hand.
+$('device').value = state.device || describeDevice(navigator.userAgent); $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
 $('diagnosticsMode').value = state.diagnosticsMode || 'compact';
 $('tokenizerFormat').value = state.tokenizerFormat || 'json';
@@ -40,10 +40,13 @@ function updateControls() {
 }
 $('kind').addEventListener('change', updateControls);
 for (const id of ['mode', 'staging', 'diagnosticsMode', 'tokenizerFormat', 'modelExecution']) $(id).addEventListener('change', updateControls);
+const inferenceLabel = phase => ({ warmup: '워밍업(첫 추론)', evaluation: '평가 추론', probe: '짧은 추론' }[phase] || '추론');
 function render() {
   const series = seriesSummary(state.results, state.active);
-  $('rows').replaceChildren(...state.results.map(result => {
+  // Newest first: the row that needs an export is the one just recovered.
+  $('rows').replaceChildren(...state.results.slice().reverse().map(result => {
     const tr = document.createElement('tr');
+    if (result.interrupted) tr.className = 'interrupted';
     const comparison = result.comparison || {}, storage = comparison.storage;
     const execution = result.execution || executionEvidence(result);
     const group = series.find(group => group.seriesId === (result.seriesId || result.runIds?.[0] || result.runId));
@@ -59,7 +62,8 @@ function render() {
     const recovered = comparison.recoveryClassification;
     for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 세션 없음' : execution.runtimeMode || '미기록'} · ${{ compact: '변경 항목 저장', snapshot: '전체 상태 저장' }[execution.diagnosticsMode] || '저장 방식 미기록'}`,
       recovered === 'cleanup-reentry' ? '자원 정리 중 재진입 · 정리 완료 미확인' :
-      result.interrupted ? (execution.modelSessionCreated ? '세션 생성 후 중단 (원인 미확인)' : '실행 중 중단 (원인 미확인)') :
+      result.interrupted ? (comparison.interruptedPhase === 'inference' ? `${inferenceLabel(comparison.interruptedInference?.phase)} 중 중단 (원인 미확인)`
+        : execution.modelSessionCreated ? '세션 생성 후 중단 (원인 미확인)' : '실행 중 중단 (원인 미확인)') :
       result.success ? scopeLabel(execution.completedScope) + (recovered === 'completed-run-reentry' ? ' · 완료 후 재진입' : '') : result.cancelled ? '사용자 중단' : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
@@ -94,6 +98,7 @@ if (state.active) {
   state.results.push({ ...state.active, success, cancelled, interrupted: !success && !cancelled && !knownFailure,
     execution: executionEvidence({ ...state.active, success }, diagnostic),
     comparison: diagnosticSummary(diagnostic && { ...diagnostic, recovery }, state.active.sessionResult) });
+  if (state.results.length > MAX_RESULTS) state.results.shift();
   $('last').textContent = JSON.stringify(diagnostic, null, 2);
   $('status').textContent = success ? '이전 실험 완료 기록을 복구했습니다.' : '이전 실험 기록을 복구했습니다. 진단 JSON을 저장해 주세요.';
   state.active = null; state.continue = null; save();
@@ -143,7 +148,7 @@ async function finish(result) {
   state.results.push({ ...active, ...result, releaseId: diagnostic?.environment?.build?.releaseId || active.releaseId,
     execution: executionEvidence({ ...active, ...result }, diagnostic),
     durationMs: Date.now() - active.startedAt, sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
-  if (state.results.length > 30) state.results.shift();
+  if (state.results.length > MAX_RESULTS) state.results.shift();
   state.active = null; finishing = false;
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;

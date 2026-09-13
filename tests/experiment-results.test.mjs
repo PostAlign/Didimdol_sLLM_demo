@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat } from '../web/sllm/experiments/results.js';
+import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat, describeDevice } from '../web/sllm/experiments/results.js';
+
+test('the device description carries OS and browser versions from the user agent', () => {
+  const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/153.0.8010.24 Mobile/15E148 Safari/604.1';
+  assert.equal(describeDevice(iphone), 'iPhone / iOS 26.6.1 / Chrome 153.0.8010.24');
+  const safari = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1';
+  assert.equal(describeDevice(safari), 'iPhone / iOS 26.4 / Safari 26.4');
+  assert.equal(describeDevice('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'), 'Linux / Chrome 141.0.0.0');
+  assert.equal(describeDevice(''), '');
+});
 
 test('interrupted loading recovers tokenizer facts from milestones without inventing session success', () => {
   const run = { environment: { tokenizerFormat: 'prepared' }, milestones: {

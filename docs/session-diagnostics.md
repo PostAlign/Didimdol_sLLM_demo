@@ -83,6 +83,49 @@ current instrumentation and record bounds while rewriting the entire run state,
 allowing comparison of storage strategy without changing the runtime build.
 It is not an exact recreation of the previous release.
 
+## Inference sampling and durable experiment results
+
+The September 13 phone exports (release `16e0a0baa98a`, commit `08bf38f`)
+created the full session with 251/251 weights and then reopened the page about
+three seconds after `warmup-start`. Nothing was recorded between the start of the
+first `generate()` call and the termination, and the evaluation page described
+the event only as an interrupted evaluation. Two changes address this:
+
+- **`inference-sample` records.** While `generate()` runs (warmup, evaluation
+  rows, short probes), the worker samples the GPU ledger, program counts and the
+  WASM heap every 500 ms between event-loop turns. A record is written when a
+  growth signal changes (observed GPU peak, program counts, WASM heap size, a
+  device loss or error), at least every five seconds as a heartbeat, and once at
+  the first generated token. Current bytes and buffer counts are recorded but do
+  not trigger writes, because they move on every decode step. The sampler never
+  waits on the GPU queue and does not touch ORT state. The `warmup-complete`, `row-complete`,
+  `probe-inference-complete` and failure summaries carry an `inference` summary
+  (sample counts, duration and the last digest). `recoveryEvidence` classifies a
+  run whose last record is `warmup-start`, `row-start`, `probe-inference-start`
+  or `inference-sample` as `interruptedPhase: 'inference'` with the phase and row;
+  `diagnosticSummary` exposes `interruptedPhase`, `interruptedInference`,
+  `inference` (the last sample) and `lastInference`. Both pages show the phase
+  and, when a sample exists, the GPU request, pipeline count and WASM heap at
+  that moment. These remain observations of process-internal counters, not a
+  measurement of the OS memory limit.
+- **Durable experiment results.** The diagnostic page keeps its results table and
+  device settings in `localStorage`
+  (`didimdol.device-experiments.results.v3`), so closing the browser after an
+  interruption no longer discards the rows before export. `active` and
+  `continue` stay in the tab's `sessionStorage`, so a second tab cannot recover
+  another tab's running experiment. A legacy single-tab state migrates once;
+  when durable storage refuses writes, the full state falls back to the tab.
+  The newest result renders first and interrupted rows are highlighted. An empty
+  device field is prefilled with the OS and browser versions parsed from the
+  user agent; the device model still has to be typed.
+
+Local verification (SwiftShader, `npm run test:streamed`, 2-token probes on the
+35- and 266-token prompts): the resident probe produced 26 samples in 31.9 s with
+a peak GPU request of 1,160,940,768 B against 1,072,392,704 B of weights and 65
+shader modules; the streamed probe peaked at 516,625,696 B. Desktop SwiftShader
+numbers do not stand in for iPhone memory behaviour; they show what the records
+contain when the phone is interrupted during warmup.
+
 ## Cleanup and acceptance
 
 Session release, OPFS closure and queue completion share a four-second cleanup

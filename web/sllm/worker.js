@@ -10,7 +10,7 @@ import { OpfsWeightStore, acquireModelLease } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
 import { disposeResources } from './cleanup.js';
-import { observeSession } from './session-observation.js';
+import { observeSession, observeInference } from './session-observation.js';
 import { bodyManifest, verifiedStreamedGraph, StreamedSession } from './streamed-model.js';
 import { opfsResidentProbe, runtimeProbe } from './experiments/probes.js';
 
@@ -101,7 +101,7 @@ class TimingStreamer extends BaseStreamer {
   start() { this.reset(); this.t0 = performance.now(); }
   put(value) {
     if (this.isPrompt) { this.isPrompt = false; return; }  // 프롬프트 통째로 1회
-    if (this.ttft === null) this.ttft = performance.now() - this.t0;
+    if (this.ttft === null) { this.ttft = performance.now() - this.t0; this.onFirstToken?.(); }
   }
   end() {}
 }
@@ -454,10 +454,30 @@ async function cleanupWorker() {
 
 // ── 한 행 실행 ──────────────────────────────────────────────────────────────
 const streamer = new TimingStreamer();
+// Marks the first generated token for calls that do not measure TTFT (warmup, probes).
+const markerStreamer = new TimingStreamer();
+let lastInference = null;
 
-async function generateOwned(inputs, options) {
-  try { return await model.generate({ ...inputs, ...options }); }
-  finally { for (const value of new Set(Object.values(inputs))) value?.dispose?.(); }
+// Read-only snapshot between event-loop turns of generate(). No queue wait: a
+// wait would change the timing being measured and could stall behind ORT.
+function inferenceSample() {
+  const loader = globalThis.__ortExternalTensorLoader;
+  return { metrics: loader?.sampleMetrics?.() ?? null, gpuLedger: trackedGpu ? { ...trackedGpu.ledger } : null,
+    ...(streamedSession ? { streaming: { ...streamedSession.weights.metrics } } : {}) };
+}
+
+async function generateOwned(inputs, options, context = { phase: 'inference' }) {
+  const observation = observeInference({ checkpoint: journal.checkpoint, sample: inferenceSample, context });
+  const tokens = options.streamer ?? markerStreamer;
+  if (!options.streamer) tokens.start();
+  tokens.onFirstToken = () => { observation.mark('first-token').catch(() => {}); };
+  try { return await model.generate({ ...inputs, ...options, streamer: tokens }); }
+  finally {
+    tokens.onFirstToken = null;
+    for (const value of new Set(Object.values(inputs))) value?.dispose?.();
+    // The summary rides on the next memory record (warmup/row/probe complete) or the failure summary.
+    lastInference = await observation.stop();
+  }
 }
 
 async function recordMemory(stage, details = {}) {
@@ -466,7 +486,8 @@ async function recordMemory(stage, details = {}) {
   await trackedGpu.flush();
   if (trackedGpu.ledger.lastError) throw new Error(`WebGPU: ${trackedGpu.ledger.lastError}`);
   if (loader.metrics.rangeReadCount !== sessionMetrics.metrics.rangeReadCount) throw new Error('Weights reloaded during inference');
-  await journal.checkpoint({ stage, ...details, metrics: loader.sampleMetrics(), gpuLedger: { ...trackedGpu.ledger },
+  const inference = lastInference; lastInference = null;
+  await journal.checkpoint({ stage, ...details, ...(inference ? { inference } : {}), metrics: loader.sampleMetrics(), gpuLedger: { ...trackedGpu.ledger },
     ...(streamedSession ? { modelExecution, streaming: { ...streamedSession.weights.metrics }, storage: { ...weightStore.metrics } } : {}) });
 }
 
@@ -489,7 +510,7 @@ async function runRow(row) {
     ...GEN,
     streamer,
     stopping_criteria: stopper,
-  });
+  }, { phase: 'evaluation', row: row.index });
   const total = performance.now() - t0;
 
   let all;
@@ -523,7 +544,7 @@ async function runAll() {
       chat_template: chatTemplate, add_generation_prompt: true, return_dict: true,
     }),
     { do_sample: false, max_new_tokens: 4, stopping_criteria: stopper,
-  });
+  }, { phase: 'warmup' });
   warmup.dispose();
   await recordMemory('warmup-complete');
   random.seed(SEED);   // 워밍업이 소비한 난수를 되돌린다.
@@ -536,7 +557,7 @@ async function runAll() {
     await recordMemory('row-start', { row: i + 1 });
     const t0 = performance.now();
     try {
-      const r = await runRow(rows[i]);
+      const r = await runRow({ ...rows[i], index: i + 1 });
       if (aborted) { await journal.finish('cancelled', { completedRows: i }); post({ type: 'aborted', at: i }); return; }
       done.push(r);
       await recordMemory('row-complete', { row: i + 1, promptLen: r.promptLen, nTok: r.nTok });
@@ -593,7 +614,8 @@ async function runProbe(maxNewTokens = 32) {
     const inputs = tokenizer.apply_chat_template(rows[index].messages.slice(0, -1), {
       chat_template: chatTemplate, add_generation_prompt: true, return_dict: true });
     const start = performance.now();
-    const result = await generateOwned(inputs, { do_sample: false, max_new_tokens: maxNewTokens, stopping_criteria: stopper });
+    const result = await generateOwned(inputs, { do_sample: false, max_new_tokens: maxNewTokens, stopping_criteria: stopper },
+      { phase: 'probe', row: index + 1 });
     try { outputs.push({ row: index + 1, promptLen: length, durationMs: performance.now() - start,
       tokens: result.tolist()[0].slice(length).map(Number) }); }
     finally { result.dispose(); }
@@ -668,8 +690,9 @@ self.onmessage = async ({ data }) => {
     }
   } catch (err) {
     const cancelled = aborted || !!loadController?.signal.aborted;
+    const inference = lastInference; lastInference = null;
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,
-      tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage });
+      tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage, ...(inference ? { inference } : {}) });
     await cleanupWorker();
     // A failed create/generate is terminal; cleanup does not authorize reuse.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
