@@ -66,7 +66,10 @@ export function executionEvidence(result, run = null) {
     modelSessionCreated: summary.modelSessionCreated ?? (run?.milestones?.['session-create-complete'] ? true : null),
     ortJavaScriptLoaded: environment.ortJavaScriptLoaded ?? null,
     ortJavaScriptMode: environment.ortJavaScriptMode ?? null,
-    ortWasmInstantiated: summary.ortWasmInstantiated ?? (summary.modelSessionCreated === true || run?.milestones?.['ort-wasm-complete'] ? true : null),
+    // A failure between `ort-wasm-start` and `ort-wasm-complete` is recorded as an `ort-wasm-error` fault; the runtime never came up.
+    ortWasmInstantiated: summary.ortWasmInstantiated ?? (summary.modelSessionCreated === true || run?.milestones?.['ort-wasm-complete'] ? true
+      : run?.fault?.stage === 'ort-wasm-error' || run?.milestones?.['ort-wasm-error'] ? false : null),
+    wasmFailure: summary.wasmFailure ?? run?.milestones?.['ort-wasm-error'] ?? null,
     diagnosticsMode: run?.persistence?.mode ?? environment.diagnosticsMode ?? null,
     sameDevice: summary.sameDevice ?? null, smallSessionRetained: summary.smallSessionRetained ?? null,
     inputSource: summary.inputSource ?? executionSettings(kind).inputSource,

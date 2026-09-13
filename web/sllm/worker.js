@@ -5,7 +5,7 @@ const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || '
 const { ort, AutoModelForCausalLM, AutoTokenizer, AutoConfig, Gemma3ForCausalLM, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
-import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint, errorText } from './diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint, errorText, errorDetails } from './diagnostics.js';
 import { OpfsWeightStore, acquireModelLease } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
@@ -438,6 +438,37 @@ async function loadRuntimeResident(data) {
   post({ type: 'result', result: summary });
 }
 
+// ORT resolves its backend lazily inside the first InferenceSession.create, so a
+// WASM fetch or instantiation failure surfaces as "no available backend found"
+// with no asset name. The September 13 streamed cached load 4/5 ended this way
+// (`Aborted(NetworkError)`) while the Networking process stayed alive. Probing
+// the same asset once, after the failure, lets the export separate a fetch that
+// still fails from an abort inside the process. Never called for a cancellation.
+async function wasmFailureEvidence(error) {
+  const state = journal?.state;
+  if (!state) return null;
+  const phases = new Set(Object.keys(state.milestones).filter(stage => stage.startsWith('ort-')));
+  for (const record of [state.last, ...state.records]) {
+    if (record?.stage === 'streamed-head-create' && record.componentPhase) phases.add(record.componentPhase);
+  }
+  if (!phases.has('ort-wasm-start') || phases.has('ort-wasm-complete')) return null;
+  const paths = ort?.env?.wasm?.wasmPaths ?? {};
+  const url = typeof paths === 'object' ? paths.wasm ?? null : null;
+  const evidence = { stage: 'ort-wasm-error', ...errorDetails(error), wasmURL: url, wasmModuleURL: typeof paths === 'object' ? paths.mjs ?? null : null,
+    onLine: typeof navigator.onLine === 'boolean' ? navigator.onLine : null, cachedStatus: null, status: null, contentLength: null, probeError: null };
+  if (url) {
+    try { evidence.cachedStatus = (await fetch(url, { cache: 'only-if-cached', mode: 'same-origin' })).status; }
+    catch (probe) { evidence.cachedStatus = errorDetails(probe).message; }
+    try {
+      const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      evidence.status = response.status;
+      evidence.contentLength = Number(response.headers.get('content-length')) || null;
+    } catch (probe) { evidence.probeError = errorDetails(probe).message; }
+  }
+  await journal.checkpoint(evidence);
+  return evidence;
+}
+
 let cleanupPromise;
 async function cleanupWorker() {
   return cleanupPromise ||= (async () => {
@@ -714,8 +745,11 @@ self.onmessage = async ({ data }) => {
   } catch (err) {
     const cancelled = aborted || !!loadController?.signal.aborted;
     const inference = lastInference; lastInference = null;
+    const observedDuring = journal.state.last?.stage;
+    const wasmFailure = cancelled ? null : await wasmFailureEvidence(err);
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: errorText(err), sessionMetrics,
-      tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage, ...(inference ? { inference } : {}) });
+      tokenizer: tokenizerResult, observedDuring, ...(wasmFailure ? { ortWasmInstantiated: false, wasmFailure } : {}),
+      ...(inference ? { inference } : {}) });
     await cleanupWorker();
     // A failed create/generate is terminal; cleanup does not authorize reuse.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : errorText(err) });

@@ -269,3 +269,21 @@ test('local timestamps match device log clocks and summaries expose the last rec
   assert.equal(diagnosticSummary({ last: { stage: 'gpu-wait', timestamp: 1789284664759 } }).lastRecordAt, 1789284664759);
   assert.equal(diagnosticSummary({ last: {} }).lastRecordAt, null);
 });
+
+test('an ort-wasm-error checkpoint is the run fault and stays visible after the failed summary', async () => {
+  const saved = new Map();
+  const run = snapshotRun('wasm', { modelExecution: 'streamed' }, async (value, key) => { saved.set(key, structuredClone(value)); return true; });
+  await run.checkpoint({ stage: 'session-create', modelExecution: 'streamed' });
+  await run.checkpoint({ stage: 'streamed-head-create', componentPhase: 'ort-wasm-start' });
+  await run.checkpoint({ stage: 'ort-wasm-error', errorType: 'RuntimeError', message: 'Aborted(NetworkError)', wasmURL: 'x.wasm', status: 200 });
+  await run.finish('failed', { error: 'no available backend found', ortWasmInstantiated: false });
+  const state = saved.get('run:wasm');
+  assert.equal(state.status, 'failed');
+  assert.equal(state.fault.stage, 'ort-wasm-error');
+  assert.equal(state.fault.status, 200);
+  assert.equal(state.milestones['ort-wasm-error'].message, 'Aborted(NetworkError)');
+  const summary = diagnosticSummary(state);
+  assert.equal(summary.effectiveStatus, 'failed');
+  assert.equal(summary.faultStage, 'ort-wasm-error');
+  assert.deepEqual(summary.ortPhases.map(phase => phase.stage), ['ort-wasm-error']);
+});

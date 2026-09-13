@@ -80,7 +80,7 @@ const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-ver
   'auxiliary-session-start', 'auxiliary-session-complete',
   'ready', 'complete', 'failed', 'cancelled']);
 const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error', 'streamed-error',
-  'tokenizer-error', 'template-error', 'evaluation-data-error']);
+  'ort-wasm-error', 'tokenizer-error', 'template-error', 'evaluation-data-error']);
 const isPreparation = stage => /^(tokenizer|template|evaluation-data)-/.test(stage);
 
 // Keep binary hashes in diagnostics without copying the entire site inventory at every checkpoint.

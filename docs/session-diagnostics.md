@@ -201,12 +201,126 @@ Reports; a sysdiagnose (both volume buttons and the side button for 1.5 s) adds
 system memory state. The evening interruptions, on a KST phone, ended at
 16:20:32, 16:31:04, 16:33:49, 16:34:30, 16:35:14 and 16:35:50.
 
+One JetsamEvent file can list several kills (every process with a `reason`),
+including kills that happened before the file's own time stamp, so a
+termination may appear in the report written at the next one. Drop the files
+into the experiment page's device-log input rather than reading them by hand;
+it matches WebContent kills to interrupted rows in time order.
+
 Open decisions that wait for that log: whether the evaluation page's iOS
 default should become `modelExecution=streamed` (resident inference completed
 0 of 3 attempts here, streamed 1 of 1), and whether the streamed cached load
 3/5 recurs with a 30 s repeat delay. The acceptance run for the streamed path
 is two 100-row evaluations; at about 17 s per row each pass takes close to
 30 minutes on this device.
+
+## September 13 late-afternoon exports with device logs (release `18cab5534d84`, commit `af91292`)
+
+Same iPhone (iPhone15,3, 5.5 GB, 16 KiB pages), Chrome 153, Asyncify, nine OPFS
+cache hits in every run, no persisted GPU fault, no device loss. The experiment
+page used `snapshot` diagnostics and a 0 s repeat delay; the evaluation page ran
+`compact`. Exports `iphone-fp32-experiments (46)`–`(54)` are each a prefix of the
+next, and all 19 rows survived two process terminations, so the durable results
+store did its job. For the first time the phone's `JetsamEvent` files from the
+same minutes were collected (`JetsamEvent-2026-09-13-173918.ips`,
+`JetsamEvent-2026-09-13-174006.ips`), together with a Networking-process disk-write
+resource report (`…diskwrites_resource-2026-09-13-172712.ips`).
+
+| KST | Screen / experiment | Outcome |
+|---|---|---|
+| 17:06:39 | Evaluation page session create, resident | 251/251, `ready` in 14.1 s |
+| 17:06:53 | Evaluation page warmup (sampled) | interrupted at `warmup-start` before any sample, page back after 1.4 s |
+| 17:23:38–17:29:33 | 1, 1b, 1c, 1d, small runtime 120 s | all complete |
+| 17:32:41 | tokenizer | complete |
+| 17:33:07 | 2c session-only, streamed | complete, 11.1 s |
+| 17:33:38 | 2c session-only, resident | **complete**, 251/251, 12.8 s (first success in four sessions) |
+| 17:34:28 / 17:35:36 | 3 full load, streamed / resident | both `ready` |
+| 17:36:41–17:37:16 | 4 cached load 1–3/5, streamed | all `ready`, 0.15–0.86 s apart |
+| 17:37:16 | 4 cached load 4/5, streamed | **failed in code** at `streamed-head-create` / `ort-wasm-start`, 0 bytes of weights, see below |
+| 17:38:43 / 17:38:56 | 4 cached load 1–2/5, resident | both `ready` |
+| 17:39:09–17:39:23 | 4 cached load 3/5, resident | interrupted at 224/251 (`onnx::MatMul_7520`), 940 MiB allocated, page back after 1.0 s |
+| 17:39:52–17:40:06 | 5 short inference, resident | load `ready` in 11.6 s, interrupted 1.0 s after the first token at 1,037 MiB requested, page back after 1.4 s |
+| 17:40:37–17:41:24 | 5 short inference, streamed | complete in 46.9 s, 32 tokens × 2 (17.1 s, 19.7 s), peak 498 MiB |
+
+The three interruptions recorded `no-unload-event` and `navigationType:
+back_forward` as before. The cached load 3/5 initializer order (224 entries) is a
+prefix of the 251-entry order of the two loads that survived, and its upload of
+940 MiB took 5.4 s against 4.6–5.2 s for them.
+
+### What the Jetsam reports say
+
+| Report (device local) | Content |
+|---|---|
+| 17:39:18.43 | `SharingUIService` (suspended, 22 MiB) killed `highwater`; `AppSSODaemon` `fc-thrashing`. Free 67 MiB, compressor 582 MiB. WebContent pid 2023: 564 MiB resident, lifetime maximum 1,841 MiB, not killed |
+| 17:40:06.65 | WebContent pid 2023 killed `highwater` at 1,754 MiB. WebContent pid 2076 killed `highwater` at 2,284 MiB (its lifetime maximum). Free 170 MiB, compressor 1,150 MiB |
+
+- The 17:39:18 snapshot falls 1.1 s after cached load 3/5 began uploading
+  initializers. The system was already short of memory (free 67 MiB) and the
+  previous run's cleanup had returned WebContent from 1,841 MiB to 564 MiB, so
+  nothing accumulated across runs inside the renderer.
+- The pid 2023 kill lies between the row's last record (17:39:22.75) and its
+  re-entry (17:39:23.76); the OS footprint was 1,754 MiB against the page's
+  940 MiB GPU request.
+- pid 2076 is the replacement process created at that re-entry (its age field is
+  negative in the report, 38.6 s of CPU time in 43 s). Its kill at 17:40:06.65
+  matches the resident probe's end (last sample 17:40:05.53, re-entry
+  17:40:06.95): 2,284 MiB against 1,037 MiB requested.
+- The WebKit GPU process held 36 MiB in both snapshots, so the weight memory is
+  charged to WebContent, at 1.87× and 2.20× the page's GPU request. Whether that is a
+  shared-memory copy or Metal buffer attribution cannot be read from these files.
+- `highwater` is the kill of a process above its own soft limit when the jetsam
+  thread runs under system pressure. The same process had survived at 1,841 MiB
+  earlier, so there is no fixed threshold: resident FP32 keeps WebContent above
+  the limit, and which run dies depends on when pressure arrives. About 830 MiB
+  of suspended third-party apps (Slack, KakaoTalk, Runner, Gmail, Podcasts,
+  Preferences) were resident at the time.
+- No report exists in the collection for the 17:06:53 evaluation-page
+  interruption; that one is still unconfirmed.
+
+The streamed cached load 4/5 was not a kill. The worker failed with
+
+```
+no available backend found. ERR: [webgpu] RuntimeError: Aborted(NetworkError:  A network error occurred.)
+@…/releases/18cab5534d84…/web/vendor/ort.asyncify.mjs:1:1822
+```
+
+1.2 s after `ort-wasm-start`, before any weight read, on the fourth back-to-back
+load. The Networking process kept its pid (1134) across both Jetsam snapshots, so
+it was not restarted. The previous session's streamed 3/5 stopped at
+`ort-plan-start` with no weights on the third rapid repeat; both remain
+unexplained and the 30 s repeat-delay comparison is still owed.
+
+The Networking resource report covers 15:57–17:27 and records 4.29 GB of
+file-backed memory dirtied through WebCore's SQLite storage with no action taken.
+`snapshot` diagnostics rewrite the whole run state on each of about 2,300
+checkpoints per run (0.47 MB each, about 1 GB per run); the results table in
+`localStorage` is 0.32 MB and is not a contributor.
+
+Changes:
+
+- **Evaluation page iOS default.** Without a `modelExecution` URL parameter, iOS
+  now streams; other platforms keep `resident`. `environment.modelExecutionSource`
+  (`url`, `default-ios`, `default`) records where the choice came from, and the
+  ready line names the mode.
+- **Device report matching.** The experiment page accepts `.ips` files. JetsamEvent
+  bodies are parsed for WebContent kills (pid, reason, `rpages`, lifetime maximum),
+  free memory and compressor size; kills are matched in time order to interrupted
+  rows, several per report when the report holds several. WebContent crash files
+  count as kills without a footprint; resource reports are named and skipped. The
+  row shows the footprint, the lifetime maximum, the ratio to the page's GPU
+  request and free memory, and `deviceLog.matchedBy: 'report'` marks file-derived
+  notes. Hand-written notes are never replaced.
+- **WASM failure evidence.** When a session fails between `ort-wasm-start` and
+  `ort-wasm-complete`, the worker records an `ort-wasm-error` fault with the error
+  type, the WASM asset URL, `navigator.onLine`, the HTTP-cache status of that
+  asset and a fresh `HEAD` status. `executionEvidence.ortWasmInstantiated` is
+  `false` for such runs instead of `null`, and `wasmFailure` carries the record.
+- **Snapshot mode label.** The selector states the disk-write cost.
+
+Still owed from the phone: two streamed 100-row evaluations from the evaluation
+page opened without parameters, streamed cached load ×5 with a 30 s delay, and
+the `.ips` files of any interruption dropped into the experiment page before
+export.
 
 ## Experiment 1d: small ORT session plus stored-weight residency
 

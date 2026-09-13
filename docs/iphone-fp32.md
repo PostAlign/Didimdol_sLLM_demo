@@ -326,7 +326,14 @@ compilation pressure unique to the full graph.
 Acceptance on the phone: complete 251-initializer loading, a first download and five cached
 loads, two 100-row evaluations without restart/device loss, stable resource usage across
 repeats, and FP32 output/ROUGE/latency comparison with the reference. Record system jetsam
-logs where available to distinguish WebContent/GPU/compilation memory from other failures.
+logs where available to distinguish WebContent/GPU/compilation memory from other failures:
+the page's file input reads `JetsamEvent-*.ips` and WebContent crash files and attaches the
+kill reason, footprint and free memory to the interrupted rows before export.
+
+The evaluation page streams weights by default on iOS (`modelExecution=streamed` unless the
+URL says otherwise). The September 13 Jetsam reports ended resident FP32 with `highwater`
+kills at 1.75–2.3 GB of WebContent footprint, while the streamed path completed every load
+and probe with a 498 MiB peak request. See docs/session-diagnostics.md.
 
 If the residency-only test fails, source/scratch improvements cannot guarantee success.
 Splitting into simultaneously resident sessions does not reduce the 1,023 MiB weight total.

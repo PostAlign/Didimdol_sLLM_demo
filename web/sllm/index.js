@@ -246,8 +246,6 @@ export function initSllm(root) {
     const a = document.createElement('a'); a.href = url; a.download = 'didimdol-diagnostics.json'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const environment = { userAgent: navigator.userAgent, isIOS, isStandalone };
-
   // ── 워커 ────────────────────────────────────────────────────────────────────
   const workerURL = new URL('./worker.js', import.meta.url);
   const runtimeOptions = new URLSearchParams(location.search);
@@ -255,8 +253,15 @@ export function initSllm(root) {
   const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
   workerURL.searchParams.set('diagnosticsMode', runtimeOptions.get('diagnosticsMode') || 'compact');
   workerURL.searchParams.set('tokenizerFormat', runtimeOptions.get('tokenizerFormat') || 'json');
-  workerURL.searchParams.set('modelExecution', runtimeOptions.get('modelExecution') || 'resident');
+  // iOS 는 URL 이 정하지 않으면 가중치 순차 로딩(streamed)이다. 9월 13일 실기기 세션에서 전체
+  // 가중치 유지(resident) 추론은 0/6 완료였고, 종료 시각의 Jetsam 로그는 WebContent 를
+  // `highwater` 사유로 1.75-2.3 GB 에서 끝냈다. 순차 로딩은 모든 로드·추론을 마쳤다(피크 498 MiB).
+  // 선택의 출처(url / default-ios / default)는 진단 export 의 environment 에 남는다.
+  const modelExecution = runtimeOptions.get('modelExecution') || (isIOS ? 'streamed' : 'resident');
+  const modelExecutionSource = runtimeOptions.get('modelExecution') ? 'url' : isIOS ? 'default-ios' : 'default';
+  workerURL.searchParams.set('modelExecution', modelExecution);
   workerURL.searchParams.set('trace', runtimeOptions.get('trace') || '0');
+  const environment = { userAgent: navigator.userAgent, isIOS, isStandalone, modelExecutionSource };
   const worker = new Worker(workerURL, { type: 'module' });
   let loaded = false, chosen = null, nRows = 100, stoppingLoad = false;
 
@@ -424,7 +429,8 @@ export function initSllm(root) {
       els.start.disabled = true;
       return;
     }
-    els.phase.textContent = '준비 완료';
+    els.phase.textContent = modelExecution === 'streamed'
+      ? `준비 완료 · 가중치 순차 로딩${modelExecutionSource === 'default-ios' ? ' (iOS 기본)' : ''}` : '준비 완료 · 전체 가중치 유지';
     els.start.disabled = false;
   })();
 }

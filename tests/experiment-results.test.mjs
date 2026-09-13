@@ -140,3 +140,18 @@ test('device log notes keep the text and extract the file, reason and footprint 
   assert.equal(parseDeviceLogNote('65536 pages').footprintMiB, 1024);
   assert.deepEqual(parseDeviceLogNote('no file found in Analytics Data'), { note: 'no file found in Analytics Data', file: null, reason: null, footprintMiB: null });
 });
+
+test('a failure between ort-wasm-start and ort-wasm-complete leaves the runtime uninstantiated, not unknown', () => {
+  const wasmFault = { stage: 'ort-wasm-error', errorType: 'RuntimeError', message: 'Aborted(NetworkError:  A network error occurred.)',
+    wasmURL: 'https://example.test/ort-wasm-simd-threaded.asyncify.wasm', onLine: true, cachedStatus: 504, status: 200, contentLength: 12345678 };
+  const failed = { status: 'failed', fault: wasmFault, milestones: { 'ort-wasm-error': wasmFault }, summary: { error: 'no available backend found' } };
+  const evidence = executionEvidence({ kind: 'warm-load', modelExecution: 'streamed', success: false }, failed);
+  assert.equal(evidence.ortWasmInstantiated, false);
+  assert.equal(evidence.wasmFailure.status, 200);
+  assert.equal(evidence.completedScope, null);
+  const unknown = executionEvidence({ kind: 'warm-load', success: false }, { status: 'failed', milestones: {}, summary: {} });
+  assert.equal(unknown.ortWasmInstantiated, null, 'a failure before the runtime started says nothing about it');
+  assert.equal(unknown.wasmFailure, null);
+  const ready = executionEvidence({ kind: 'warm-load', success: true }, { status: 'ready', milestones: { 'ort-wasm-complete': {} }, summary: {} });
+  assert.equal(ready.ortWasmInstantiated, true);
+});

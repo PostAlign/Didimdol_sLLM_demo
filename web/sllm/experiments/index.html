@@ -21,19 +21,20 @@
 <label>런타임 <select id="mode" disabled><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
 <label>모델 실행 <select id="modelExecution" disabled><option value="resident">전체 가중치 유지 (기존)</option><option value="streamed">가중치 순차 로딩 (FP32 · 비교용)</option></select></label>
 <label>전송 크기 <select id="staging" disabled><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
-<label>진단 저장 <select id="diagnosticsMode" disabled><option value="compact">변경된 항목만 저장 (기본)</option><option value="snapshot">전체 상태 저장 (비교용)</option></select></label>
+<label>진단 저장 <select id="diagnosticsMode" disabled><option value="compact">변경된 항목만 저장 (기본)</option><option value="snapshot">전체 상태 저장 (비교용 · 실행당 약 1 GB 디스크 쓰기)</option></select></label>
 <label>토크나이저 로더 <select id="tokenizerFormat" disabled><option value="json">기존 JSON (기본)</option><option value="prepared">미리 변환한 데이터 (비교용)</option></select></label>
 <label>2c 세션 유지 관찰 <select id="sessionIdle" disabled><option value="0">관찰 없이 종료 (기본)</option><option value="120">생성 후 120초 유지</option></select></label>
 <label>상주·세션·전체 로드 반복 <select id="repeats" disabled><option value="1">1회</option><option value="3">3회</option></select></label>
 <label>반복 사이 대기 <select id="repeatDelay" disabled><option value="0">대기 없음 (기본)</option><option value="10">10초</option><option value="30">30초</option></select></label>
 <label>검사기 연결 <select id="inspector" disabled><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
+<label>기기 로그 파일 (JetsamEvent·WebContent <code>.ips</code>, 여러 개 가능) <input id="deviceLogFiles" type="file" accept=".ips,.txt,text/plain,application/json" multiple></label>
 <p>기존 방식의 GPU 가중치는 약 1,023 MiB입니다. 순차 로딩은 2c와 전체 모델 실험에 적용되며 가중치 약 423 MiB와 2 MiB 전송 버퍼를 사용합니다. 토큰마다 가중치를 다시 읽으므로 생성 속도가 느려질 수 있습니다. 연산 임시 메모리는 별도입니다.</p>
 <p>상주 실험은 ORT 세션을 생성하지 않습니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
 <p>1d는 작은 모델 세션을 유지하면서 같은 GPU 장치에 전체 가중치를 올려 검증합니다. 작은 모델의 추가 자원은 별도 기록되며, 전체 모델 추론 성공을 뜻하지 않습니다.</p>
 <p>토크나이저 실험은 전체 로드와 같은 토크나이저를 준비하며 모델 가중치는 적재하지 않습니다. 전체 로드는 토크나이저 준비 후 가중치를 적재합니다.</p>
 <p>결과 표와 기기 정보는 이 브라우저에 남아 탭을 닫아도 유지되며, 최근 결과가 위에 표시됩니다. 실험은 한 번에 한 탭에서만 실행하세요. 추론 중에는 0.5초 간격으로 GPU 요청량·파이프라인 수·WASM heap이 바뀔 때마다 기록되어, 첫 추론 중 종료 시 마지막 샘플이 남습니다.</p>
 <p>실험 시작 버튼을 누르면 실행을 위해 페이지가 한 번 다시 열립니다. 2c의 120초 관찰은 추론 없이 세션을 유지하며, 생성 완료와 관찰 완료를 따로 기록합니다. 토크나이저 비교는 같은 설정에서 기존 JSON과 미리 변환한 데이터를 번갈아 실행하세요.</p>
-<p>중단 원인은 기기 로그로만 확정할 수 있습니다. 실험 전에 설정 → 개인정보 보호 및 보안 → 분석 및 향상에서 iPhone 분석 공유를 켜 두고, 중단 뒤에는 같은 화면의 분석 데이터에서 그 시각의 <code>JetsamEvent-…ips</code> 또는 <code>com.apple.WebKit.WebContent</code> 파일을 찾아 각 행의 기기 로그 메모에 파일명·reason·풋프린트를 적어 두세요. 파일 시각은 기기 현지 시각이며, 표의 기기 로그 칸과 내보내기의 <code>*Local</code> 필드가 같은 기준으로 적혀 있습니다. 반복 사이 대기는 연속 실행이 결과에 영향을 주는지 비교할 때 사용합니다.</p>
+<p>중단 원인은 기기 로그로만 확정할 수 있습니다. 실험 전에 설정 → 개인정보 보호 및 보안 → 분석 및 향상에서 iPhone 분석 공유를 켜 두고, 중단 뒤에는 같은 화면의 분석 데이터에서 그 시각의 <code>JetsamEvent-…ips</code> 또는 <code>com.apple.WebKit.WebContent</code> 파일을 찾아 위의 기기 로그 파일 입력에 넣으면 중단된 행과 시각순으로 짝지어 reason·풋프린트·프로세스 최대치·시스템 여유 메모리를 기록합니다. 리포트 하나가 여러 종료를 담을 수 있으며(다음 종료 시각에 함께 기록됨), <code>highwater</code>는 프로세스별 한도를 넘은 상태에서 시스템 압박이 왔을 때 우선 종료된 것입니다. 파일을 옮길 수 없으면 기기 로그 메모에 파일명·reason·풋프린트를 직접 적어도 됩니다. 손으로 적은 메모는 파일로 덮어쓰지 않습니다. 파일 시각은 기기 현지 시각이며, 표의 기기 로그 칸과 내보내기의 <code>*Local</code> 필드가 같은 기준으로 적혀 있습니다. 반복 사이 대기는 연속 실행이 결과에 영향을 주는지 비교할 때 사용합니다.</p>
 <p>메모리 비교는 같은 전송 크기에서 1b·1c와 2c·3을 각각 비교하세요. 1c는 토크나이저를 유지한 채 전체 가중치를 검증합니다. 2c는 전체 모델 세션만 준비하며 추론 준비 완료를 뜻하지 않습니다. 각 항목은 3회 반복할 수 있고, 중단 뒤에는 자동 재시도하지 않습니다.</p>
 <p><button id="start" disabled>실험 시작</button><button id="stop" disabled>중단</button><button id="export" disabled>진단 JSON 저장</button></p>
 <p id="status" role="status">준비</p>

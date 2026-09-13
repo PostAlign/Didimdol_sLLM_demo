@@ -2,6 +2,7 @@ import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentit
 import { runtimeRelease } from '../ort-runtime.js';
 import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice, runContext, parseDeviceLogNote } from './results.js';
 import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
+import { parseDeviceReport, matchDeviceReports } from './device-log.js';
 
 const $ = id => document.getElementById(id);
 const storages = { local: localStorage, session: sessionStorage };
@@ -90,7 +91,14 @@ function deviceLogCell(result) {
   const at = result.lastRecordAt ?? result.endedAt ?? result.startedAt;
   const when = localTimestamp(at);
   const log = result.deviceLog;
-  const summary = log ? [log.file, log.reason, log.footprintMiB == null ? null : `${log.footprintMiB} MiB`].filter(Boolean).join(' · ') || log.note : '기록 없음';
+  // The OS footprint is what Jetsam acted on; the page's GPU request is what the
+  // worker counted. On the September 13 phone the first was 1.87× and 2.20× the second.
+  const requested = result.comparison?.gpuRequestedCurrent;
+  const ratio = log?.footprintMiB != null && requested > 0 ? (log.footprintMiB / (requested / 2 ** 20)).toFixed(2) : null;
+  const summary = log ? [log.file, log.reason, log.footprintMiB == null ? null : `${log.footprintMiB} MiB`,
+    log.lifetimeMaxMiB == null ? null : `최대 ${log.lifetimeMaxMiB} MiB`, ratio == null ? null : `페이지 GPU 요청의 ${ratio}배`,
+    log.freeMiB == null ? null : `시스템 여유 ${log.freeMiB} MiB`, log.matchedBy === 'report' ? '파일에서 대조' : null]
+    .filter(Boolean).join(' · ') || log.note : '기록 없음';
   const text = document.createElement('div'); text.textContent = `${when ? `${when.slice(11, 19)} 기준 · ` : ''}${summary}`;
   const button = document.createElement('button'); button.type = 'button'; button.textContent = log ? '기기 로그 수정' : '기기 로그 메모';
   button.onclick = () => {
@@ -332,6 +340,38 @@ $('stop').onclick = async () => {
     last: { stage: 'user-cancelled', timestamp: Date.now() }, cleanupError: result.cleanupError }, runKey(active.runId));
   await finish(result);
 };
+// Reports are matched to interrupted rows by time and stored in the same shape
+// as a hand-written note. A note the tester typed is never replaced by a file.
+$('deviceLogFiles').addEventListener('change', async event => {
+  const files = [...(event.target.files || [])];
+  if (!files.length) return;
+  const clock = deviceClock();
+  const reports = [];
+  for (const file of files) {
+    let text = '';
+    try { text = await file.text(); } catch { reports.push({ file: file.name, kind: 'unknown', kills: [], webContent: [], error: 'unreadable' }); continue; }
+    reports.push(parseDeviceReport(text, file.name, { timezoneOffsetMinutes: clock.timezoneOffsetMinutes }));
+  }
+  const { matched, unmatched, context, ignored } = matchDeviceReports(state.results, reports);
+  const kept = [];
+  let applied = 0;
+  for (const { index, deviceLog } of matched) {
+    const current = state.results[index]?.deviceLog;
+    if (current && current.matchedBy !== 'report') { kept.push(deviceLog.file); continue; }
+    state.results[index].deviceLog = deviceLog; applied++;
+  }
+  save(); render();
+  const parts = [`${applied}개 행에 기기 로그를 기록했습니다.`];
+  if (kept.length) parts.push(`손으로 적은 메모가 있어 건너뜀 ${kept.length}건`);
+  if (unmatched.length) parts.push(`짝지을 중단 행이 없는 WebContent 종료 ${unmatched.length}건 (${unmatched.map(kill => `${kill.file} pid ${kill.pid} ${kill.reason} ${kill.footprintMiB ?? '?'} MiB`).join(', ')})`);
+  for (const report of context) {
+    const web = report.webContent.map(process => `WebContent pid ${process.pid} ${process.footprintMiB ?? '?'} MiB (최대 ${process.lifetimeMaxMiB ?? '?'})`).join(', ');
+    parts.push(`${report.file}: WebContent 종료 없음${report.kills.length ? ` · 종료 ${report.kills.join(', ')}` : ''}${report.freeMiB == null ? '' : ` · 시스템 여유 ${report.freeMiB} MiB`}${web ? ` · ${web}` : ''}`);
+  }
+  for (const report of ignored) parts.push(`${report.file}: ${report.kind === 'resource' ? `리소스 리포트 (${report.event ?? '종류 미상'}), 종료 아님` : report.error || '읽을 수 없는 형식'}`);
+  $('status').textContent = parts.join(' · ');
+  event.target.value = '';
+});
 $('export').onclick = async () => {
   const ids = new Set(state.results.flatMap(result => result.runIds || [result.runId]));
   for (const id of state.active?.runIds || []) ids.add(id);
