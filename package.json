@@ -6,7 +6,8 @@
     "release": "node tools/release.mjs",
     "verify:release": "node tools/release.mjs verify",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser-smoke.mjs"
+    "test:browser": "node tests/browser-smoke.mjs",
+    "test:streamed": "node tests/streamed-browser.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",

@@ -88,3 +88,6 @@ node_modules/
 web/vendor/
 test-results/
 model/experiments/
+
+# Small generated graphs; weights remain in the pinned external model files.
+!model/streamed/*.onnx

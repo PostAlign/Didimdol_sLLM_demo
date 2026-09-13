@@ -237,7 +237,7 @@ export async function installGpuTracking(largestTensorBytes, emit = () => {}, op
       return snapshot();
     },
     setBufferRole(buffer, role) {
-      if (!['weight', 'runtime-weight', 'verification', 'other'].includes(role)) throw new Error('Unknown GPU buffer role');
+      if (!['weight', 'runtime-weight', 'streamed-weight', 'verification', 'other'].includes(role)) throw new Error('Unknown GPU buffer role');
       const entry = buffers.get(buffer);
       if (!entry || entry.destroyed || entry.owner.destroyed || entry.role === role) return;
       const before = group(entry.owner, entry.role), after = group(entry.owner, role);

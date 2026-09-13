@@ -242,6 +242,7 @@ export function initSllm(root) {
   const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
   workerURL.searchParams.set('diagnosticsMode', runtimeOptions.get('diagnosticsMode') || 'compact');
   workerURL.searchParams.set('tokenizerFormat', runtimeOptions.get('tokenizerFormat') || 'json');
+  workerURL.searchParams.set('modelExecution', runtimeOptions.get('modelExecution') || 'resident');
   workerURL.searchParams.set('trace', runtimeOptions.get('trace') || '0');
   const worker = new Worker(workerURL, { type: 'module' });
   let loaded = false, chosen = null, nRows = 100, stoppingLoad = false;

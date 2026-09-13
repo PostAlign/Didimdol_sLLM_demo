@@ -43,6 +43,8 @@ export function executionEvidence(result, run = null) {
     else if (kind === 'evaluation') completedScope = 'two-evaluations';
   }
   return { runtimeMode: isResident(kind) ? null : environment.runtimeMode ?? result.mode ?? null,
+    modelExecution: environment.modelExecution ?? summary.modelExecution ?? result.modelExecution ?? null,
+    streaming: [run?.last, ...(run?.records || []).slice().reverse()].find(record => record?.streaming)?.streaming ?? summary.streaming ?? null,
     loadOrder: environment.loadOrder ?? summary.tokenizer?.loadOrder ?? null,
     tokenizerBuild: environment.build?.tokenizer ?? summary.tokenizer?.tokenizerBuild ?? null,
     tokenizerPrepared: summary.tokenizerPrepared ?? (run?.milestones?.['tokenizer-ready'] ? true : run?.milestones?.['session-create']?.tokenizerPrepared ?? null),

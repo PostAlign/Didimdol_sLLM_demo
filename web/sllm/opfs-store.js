@@ -2,6 +2,22 @@ import { checkedRange } from './external-source.js';
 
 const hex = buffer => Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
 const abort = signal => signal?.throwIfAborted();
+
+/** Keep the origin's model lease until disposal without blocking worker messages. */
+export async function acquireModelLease(locks) {
+  if (!locks) throw new Error('순차 로딩에는 탭 간 모델 접근 잠금이 필요합니다.');
+  let release, acquired, rejected;
+  const lifetime = new Promise(resolve => { release = resolve; });
+  const ready = new Promise((resolve, reject) => { acquired = resolve; rejected = reject; });
+  const task = locks.request('didimdol-model-load', { ifAvailable: true }, async lock => {
+    if (!lock) throw new Error('다른 탭에서 모델을 사용 중입니다. 해당 모델을 종료한 뒤 실행해 주세요.');
+    acquired();
+    await lifetime;
+  });
+  task.catch(rejected);
+  await ready;
+  return async () => { release(); await task; };
+}
 const safeName = name => {
   if (!/^[a-zA-Z0-9_.-]+$/.test(name) || name === '.' || name === '..') throw new Error(`Invalid weight filename: ${name}`);
   return name;

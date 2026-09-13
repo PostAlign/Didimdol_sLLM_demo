@@ -8,4 +8,4 @@ const { ort, build, asset } = await loadOrt(mode);
 globalThis.__didimdolOrt = ort;
 export { ort, mode, build };
 const transformers = await import(asset('web/vendor/transformers.mjs'));
-export const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer, InterruptableStoppingCriteria, env, random } = transformers;
+export const { AutoModelForCausalLM, AutoTokenizer, AutoConfig, Gemma3ForCausalLM, BaseStreamer, InterruptableStoppingCriteria, env, random } = transformers;

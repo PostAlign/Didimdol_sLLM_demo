@@ -76,7 +76,7 @@ const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-ver
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
   'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'session-idle-start', 'session-idle-complete',
   'ready', 'complete', 'failed', 'cancelled']);
-const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error',
+const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error', 'streamed-error',
   'tokenizer-error', 'template-error', 'evaluation-data-error']);
 const isPreparation = stage => /^(tokenizer|template|evaluation-data)-/.test(stage);
 
@@ -129,6 +129,8 @@ export function diagnosticSummary(run, sessionFallback = null) {
     ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
     ?? run.milestones?.['weights-prepared']?.storage ?? null;
   return { effectiveStatus: fault || run.cleanup?.success === false || run.cleanupError ? 'failed' : interrupted ? 'interrupted' : run.status,
+    modelExecution: run.environment?.modelExecution ?? session?.modelExecution ?? null,
+    streaming: [last, ...(run.records || []).slice().reverse()].find(record => record.streaming)?.streaming ?? session?.streaming ?? null,
     file: fault?.file ?? last.file ?? null, observedDuring: fault?.observedDuring ?? last.observedDuring ?? null,
     loadOrder: run.environment?.loadOrder ?? session?.loadOrder ?? null,
     tokenizer: run.summary?.tokenizer ?? session?.tokenizer ?? run.milestones?.['tokenizer-ready'] ?? null,

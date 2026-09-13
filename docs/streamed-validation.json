@@ -1,0 +1,182 @@
+{
+  "date": "2026-09-13",
+  "environment": "Linux, Playwright Chromium, SwiftShader (not iPhone)",
+  "sourceRevision": "8c50d7686bb1b205c02d42bb4b64505483c41a2b",
+  "sourceGraphSha256": "bbbfa81fde1230c1b16566d27e3e21d1dede60ec9df74fc6847921e86e012c5a",
+  "generatedGraphs": {
+    "body": {
+      "file": "body.onnx",
+      "bytes": 944065,
+      "sha256": "0a7643aec00536f57d78d485516e227e24a81d117d35a920090ba4e77ba000c6"
+    },
+    "head": {
+      "file": "head.onnx",
+      "bytes": 169,
+      "sha256": "7ae6e019c8a362b2805aab2b7420816a0821d94f0ccce000232f52c71837a920"
+    }
+  },
+  "unitTests": 61,
+  "pythonTests": 3,
+  "existingBrowserCases": 19,
+  "cpuCorrectness": [
+    {
+      "promptTokens": 35,
+      "tokens": [
+        238789,
+        236764,
+        75115,
+        41581
+      ],
+      "maxLogitError": 4.863739013671875e-05,
+      "maxCacheError": 0.0
+    },
+    {
+      "promptTokens": 266,
+      "tokens": [
+        238789,
+        236764,
+        236743,
+        236812
+      ],
+      "maxLogitError": 4.1961669921875e-05,
+      "maxCacheError": 0.0
+    }
+  ],
+  "browser": [
+    {
+      "mode": "asyncify",
+      "execution": "resident",
+      "releaseId": "aadb5ef7f1f614486a557d793eb095f8d70b380b9b719b88e1808b162b32ed2c",
+      "bodyOrResidentWeightBytes": 1072392704,
+      "sessionGpuRequestedBytes": 1072401888,
+      "inferenceGpuRequestedPeakBytes": 1160940768,
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 14133.5,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 32389.30000001192,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "cleanupSucceeded": true
+    },
+    {
+      "mode": "asyncify",
+      "execution": "streamed",
+      "releaseId": "aadb5ef7f1f614486a557d793eb095f8d70b380b9b719b88e1808b162b32ed2c",
+      "bodyOrResidentWeightBytes": 401304064,
+      "sessionGpuRequestedBytes": 443256032,
+      "inferenceGpuRequestedPeakBytes": 516625696,
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 12515,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 37185,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "cleanupSucceeded": true,
+      "repeatedProbeGpuRequestedBytes": [
+        516536096,
+        516536096
+      ],
+      "streaming": {
+        "gpuBufferBytes": 41943040,
+        "cpuScratchBytes": 2097152,
+        "embeddingReadBytes": 1551360,
+        "outputReadBytes": 5368709120,
+        "uploadedBytes": 5368709120,
+        "embeddingMs": 751.9999999701977,
+        "uploadMs": 11252.90000000596,
+        "outputComputeMs": 13131.999999940395,
+        "projections": 8,
+        "chunks": 128
+      }
+    },
+    {
+      "mode": "jspi",
+      "execution": "streamed",
+      "releaseId": "c6a0348fe481028cbaaf480e4d07a6c7d4707f9744a4813c2205b4bf417b75da",
+      "bodyOrResidentWeightBytes": 401304064,
+      "sessionGpuRequestedBytes": 443256032,
+      "inferenceGpuRequestedPeakBytes": 516625696,
+      "outputs": [
+        {
+          "row": 3,
+          "promptLen": 35,
+          "durationMs": 12644.600000023842,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "row": 95,
+          "promptLen": 266,
+          "durationMs": 35905.10000002384,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "cleanupSucceeded": true,
+      "repeatedProbeGpuRequestedBytes": [
+        516536096,
+        516536096
+      ],
+      "streaming": {
+        "gpuBufferBytes": 41943040,
+        "cpuScratchBytes": 2097152,
+        "embeddingReadBytes": 1551360,
+        "outputReadBytes": 5368709120,
+        "uploadedBytes": 5368709120,
+        "embeddingMs": 759.5999999344349,
+        "uploadMs": 11327.799999922514,
+        "outputComputeMs": 12535.100000053644,
+        "projections": 8,
+        "chunks": 128
+      }
+    }
+  ],
+  "sessionObservation": {
+    "releaseId": "9e050f966ed9da955170c4f358289018587b4ce509bf8c80055fe7a0304993a9",
+    "idleRequestedSeconds": 120,
+    "idleElapsedMs": 120001.90000000596,
+    "idleAcceptanceCompleted": true,
+    "cleanupSucceeded": true,
+    "subsequentCancellationSucceeded": true,
+    "cancellationCleanupSucceeded": true,
+    "leaseReturned": true
+  },
+  "limits": [
+    "GPU requests are not RSS or physical driver memory.",
+    "No iPhone run, five-load handset acceptance, or two full 100-row evaluations were performed.",
+    "Browser output comparisons used two generated tokens per short/long prompt; CPU comparisons used four.",
+    "Final upload error-preservation refinement was covered by unit tests; browser case release identities are recorded individually."
+  ]
+}

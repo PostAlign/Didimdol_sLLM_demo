@@ -2,15 +2,16 @@
  * OrtCreateSession. See docs/session-create-memory.md for the source audit. */
 
 const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || 'asyncify';
-const { AutoModelForCausalLM, AutoTokenizer, BaseStreamer,
+const { ort, AutoModelForCausalLM, AutoTokenizer, AutoConfig, Gemma3ForCausalLM, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
 import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint } from './diagnostics.js';
-import { OpfsWeightStore } from './opfs-store.js';
+import { OpfsWeightStore, acquireModelLease } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
 import { disposeResources } from './cleanup.js';
 import { observeSession } from './session-observation.js';
+import { bodyManifest, verifiedStreamedGraph, StreamedSession } from './streamed-model.js';
 import { opfsResidentProbe, runtimeProbe } from './experiments/probes.js';
 
 import { makeRouge1 } from './rouge.js';
@@ -62,6 +63,9 @@ env.fetch = (input, init) => {
 // Files are verified on disk before ORT receives small range-source descriptors.
 let weightStore, journal, loadController, trackedGpu, sessionMetrics;
 let operation = null, queuedRun = null, preparationAttempted = false;
+let modelExecution = 'resident', streamedSession = null;
+let pendingStreamedSessions = [];
+let releaseModelLease;
 const trace = new URL(self.location.href).searchParams.get('trace') === '1';
 async function mountWeights(manifest) {
   weightStore = await OpfsWeightStore.open(manifest);
@@ -222,6 +226,7 @@ async function load({ device: preferred, stagingMiB = 8, environment = {} }, ses
 
 // Both the production load and the session-only diagnostic use this exact path.
 async function loadModelSession(stagingMiB, timings, loadOrder) {
+  if (modelExecution === 'streamed') return loadStreamedSession(timings, loadOrder);
   // 모바일 빌드 자체가 단일 스레드이며 런타임 설정도 일치시킨다.
   try {
     env.backends.onnx.wasm.numThreads = 1;
@@ -325,6 +330,72 @@ async function loadModelSession(stagingMiB, timings, loadOrder) {
   env.useBrowserCache = true;
 }
 
+async function loadStreamedSession(timings, loadOrder) {
+  const started = performance.now();
+  const sourceURL = new URL('../../model/initializers.json', import.meta.url);
+  const descriptorURL = new URL('../../model/streamed/manifest.json', import.meta.url);
+  const [sourceResponse, descriptorResponse] = await Promise.all([fetch(sourceURL), fetch(descriptorURL)]);
+  if (!sourceResponse.ok || !descriptorResponse.ok) throw new Error('Streamed model metadata missing');
+  const source = await sourceResponse.json(), descriptor = await descriptorResponse.json();
+  if (source.revision !== REVISION) throw new Error('Streamed model revision mismatch');
+  const manifest = bodyManifest(source, descriptor);
+  const [bodyGraph, headGraph] = await Promise.all(['body', 'head'].map(name => verifiedStreamedGraph(descriptor, name, descriptorURL)));
+  timings.graphPreparationMs = performance.now() - started;
+  await journal.checkpoint({ stage: 'graph-verified', modelExecution, graphSha256: manifest.graphSha256,
+    sourceGraphSha256: source.graphSha256, expectedInitializerCount: manifest.initializers.filter(x => x.location).length,
+    expectedGpuResidentBytes: descriptor.bodyWeightBytes + descriptor.chunkBytes });
+  const preparationStarted = performance.now();
+  // Open against the original manifest: existing verified OPFS weights remain usable.
+  const externalData = await mountWeights(source);
+  timings.weightPreparationMs = performance.now() - preparationStarted;
+  trackedGpu = await installGpuTracking(descriptor.chunkBytes, record => {
+    if (['gpu-uncaptured-error', 'gpu-error', 'device-lost'].includes(record.stage)) return journal.checkpoint(record);
+  }, { context: () => gpuOperationContext(journal.state.last) });
+  const options = { executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled', enableCpuMemArena: false, enableMemPattern: false };
+  await journal.checkpoint({ stage: 'session-create', modelExecution, loadOrder, tokenizerPrepared: !!tokenizer,
+    stagingMiB: 2, timings: { ...timings }, storage: { ...weightStore.metrics } });
+  const modelStarted = performance.now();
+  // The head has dynamic weights and no external initializers. Create it once.
+  globalThis.__ortExternalTensorLoader = { closed: true, phase: async stage => {
+    await journal.checkpoint({ stage: 'streamed-head-create', componentPhase: stage });
+  } };
+  const head = await ort.InferenceSession.create(headGraph, options);
+  pendingStreamedSessions.push(head);
+  const loader = new SessionRangeLoader({ manifest, stagingMiB: 2, signal: loadController.signal,
+    gpuTracker: trackedGpu, storage: () => weightStore.metrics, checkpoint: record => journal.checkpoint(record) });
+  globalThis.__ortExternalTensorLoader = loader;
+  let success = false;
+  try {
+    const gpuOutputs = Object.fromEntries([...Array.from({ length: 18 }, (_, i) => [`present.${i}.key`, `present.${i}.value`]).flat(),
+      descriptor.hiddenOutput].map(name => [name, 'gpu-buffer']));
+    const body = await ort.InferenceSession.create(bodyGraph, { ...options, externalData, preferredOutputLocation: gpuOutputs });
+    pendingStreamedSessions.push(body);
+    if (loader.metrics.loadedInitializerCount !== manifest.initializers.filter(x => x.location).length) throw new Error('Incomplete streamed body load');
+    const config = await AutoConfig.from_pretrained(REPO, { revision: REVISION });
+    const generationResponse = await fetch(LOCAL['generation_config.json']);
+    if (!generationResponse.ok) throw new Error('Generation config missing');
+    streamedSession = new StreamedSession({ ort, body, head, descriptor, store: weightStore, manifest: source,
+      tracker: trackedGpu, signal: loadController.signal, checkpoint: record => journal.checkpoint(record) });
+    model = new Gemma3ForCausalLM(config, { model: streamedSession }, { generation_config: await generationResponse.json() });
+    pendingStreamedSessions = [];
+    await trackedGpu.flush();
+    streamedSession.weights.check();
+    success = true;
+  } finally {
+    timings.modelLoadCallMs = performance.now() - modelStarted;
+    const metrics = loader.close(success);
+    // Release the read handle, retaining the verified store for inference.
+    weightStore.closeActive();
+    sessionMetrics = { stage: success ? 'session-create-complete' : 'session-create-failed', modelExecution,
+      loadOrder, tokenizer: tokenizerResult, tokenizerPrepared: !!tokenizer, modelSessionCreated: success,
+      runtimeMode, stagingMiB: 2, durationMs: performance.now() - started, metrics, timings: { ...timings },
+      streaming: streamedSession ? { ...streamedSession.weights.metrics } : null,
+      gpuLedger: { ...trackedGpu.ledger }, storage: { ...weightStore.metrics } };
+    await journal.checkpoint(sessionMetrics);
+    post({ type: 'session-result', result: sessionMetrics });
+  }
+}
+
 async function loadResidentComparison(data) {
   const withTokenizer = data.type === 'resident-opfs-tokenizer';
   if (withTokenizer) await loadTokenizer('tokenizer-before-residency');
@@ -371,7 +442,11 @@ async function cleanupWorker() {
     const session = model;
     model = null; tokenizer = null; tokenizerResult = null; chatTemplate = null; rows = null; rouge1 = null;
     const cleanup = await disposeResources({ store: weightStore, loader: globalThis.__ortExternalTensorLoader,
-      tracker: trackedGpu, releaseSession: () => session?.dispose() });
+      tracker: trackedGpu, releaseSession: async () => {
+        try { if (session) await session.dispose(); else await Promise.all(pendingStreamedSessions.map(value => value.release())); }
+        finally { pendingStreamedSessions = []; streamedSession?.weights.dispose(); streamedSession = null; }
+      } });
+    await releaseModelLease?.(); releaseModelLease = null;
     if (journal) await saveCheckpoint(cleanup, `cleanup:${journal.state.runId}`);
     return cleanup;
   })();
@@ -391,7 +466,8 @@ async function recordMemory(stage, details = {}) {
   await trackedGpu.flush();
   if (trackedGpu.ledger.lastError) throw new Error(`WebGPU: ${trackedGpu.ledger.lastError}`);
   if (loader.metrics.rangeReadCount !== sessionMetrics.metrics.rangeReadCount) throw new Error('Weights reloaded during inference');
-  await journal.checkpoint({ stage, ...details, metrics: loader.sampleMetrics(), gpuLedger: { ...trackedGpu.ledger } });
+  await journal.checkpoint({ stage, ...details, metrics: loader.sampleMetrics(), gpuLedger: { ...trackedGpu.ledger },
+    ...(streamedSession ? { modelExecution, streaming: { ...streamedSession.weights.metrics }, storage: { ...weightStore.metrics } } : {}) });
 }
 
 async function runRow(row) {
@@ -550,13 +626,15 @@ self.onmessage = async ({ data }) => {
   const loadOrder = { tokenizer: 'tokenizer-only', 'session-only': 'session-only',
     'resident-opfs': 'residency-only', 'resident-opfs-tokenizer': 'tokenizer-before-residency', 'runtime-resident': 'runtime-before-residency' }[operation] || LOAD_ORDER;
   if (preparationOperations.has(operation)) tokenizerFormat = data.environment?.tokenizerFormat || new URL(self.location.href).searchParams.get('tokenizerFormat') || 'json';
+  if (preparationOperations.has(operation)) modelExecution = data.environment?.modelExecution || new URL(self.location.href).searchParams.get('modelExecution') || 'resident';
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
-    runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder, tokenizerFormat,
-    stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+    runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder, tokenizerFormat, modelExecution,
+    stagingMiB: operation === 'tokenizer' ? null : modelExecution === 'streamed' ? 2 : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
     diagnosticsMode: data.environment?.diagnosticsMode || new URL(self.location.href).searchParams.get('diagnosticsMode') || 'compact',
     workerURL: self.location.href });
   try {
     journal.state.environment.build = buildIdentity(runtimeBuild);
+    if (!['resident', 'streamed'].includes(modelExecution)) throw new Error('Unknown model execution mode');
     await journal.checkpoint({ stage: `${operation}-start` });
     if (preparationOperations.has(data.type)) {
       if (preparationAttempted) throw new Error('Use a fresh worker for each preparation attempt');
@@ -578,7 +656,10 @@ self.onmessage = async ({ data }) => {
         else if (resident) await loadResidentComparison(data);
         else await load(data, data.type === 'session-only');
       };
-      if (navigator.locks) await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute);
+      if (modelExecution === 'streamed' && ['load', 'session-only'].includes(data.type)) {
+        releaseModelLease = await acquireModelLease(navigator.locks);
+        await execute(true);
+      } else if (navigator.locks) await navigator.locks.request('didimdol-model-load', { ifAvailable: true }, execute);
       else await execute(true);
     } else {
       if (!model || !tokenizer || !rouge1) throw new Error('Model and tokenizer must both be prepared');
@@ -586,14 +667,15 @@ self.onmessage = async ({ data }) => {
       else await runAll();
     }
   } catch (err) {
-    const cancelled = preparationOperations.has(data.type) && loadController?.signal.aborted;
+    const cancelled = aborted || !!loadController?.signal.aborted;
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,
       tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage });
     await cleanupWorker();
     // A failed create/generate is terminal; cleanup does not authorize reuse.
     post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
   } finally {
-    weightStore?.close();
+    if (modelExecution === 'streamed' && model) weightStore?.closeActive();
+    else weightStore?.close();
     operation = null;
     if (queuedRun) { const next = queuedRun; queuedRun = null; queueMicrotask(() => self.onmessage({ data: next })); }
   }

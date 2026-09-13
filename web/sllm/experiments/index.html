@@ -19,13 +19,14 @@
 <option value="evaluation">6. 같은 세션에서 100건 평가 2회</option>
 </select></label>
 <label>런타임 <select id="mode" disabled><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
+<label>모델 실행 <select id="modelExecution" disabled><option value="resident">전체 가중치 유지 (기존)</option><option value="streamed">가중치 순차 로딩 (FP32 · 비교용)</option></select></label>
 <label>전송 크기 <select id="staging" disabled><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
 <label>진단 저장 <select id="diagnosticsMode" disabled><option value="compact">변경된 항목만 저장 (기본)</option><option value="snapshot">전체 상태 저장 (비교용)</option></select></label>
 <label>토크나이저 로더 <select id="tokenizerFormat" disabled><option value="json">기존 JSON (기본)</option><option value="prepared">미리 변환한 데이터 (비교용)</option></select></label>
 <label>2c 세션 유지 관찰 <select id="sessionIdle" disabled><option value="0">관찰 없이 종료 (기본)</option><option value="120">생성 후 120초 유지</option></select></label>
 <label>상주·세션·전체 로드 반복 <select id="repeats" disabled><option value="1">1회</option><option value="3">3회</option></select></label>
 <label>검사기 연결 <select id="inspector" disabled><option value="unknown">미기록</option><option value="detached">연결 안 함</option><option value="attached">연결함</option></select></label>
-<p>전송 크기는 임시 버퍼 크기를 바꿉니다. 전체 가중치의 GPU 상주량 약 1,023 MiB는 동일합니다. 작은 모델 실험은 실행 후 120초 동안 관찰합니다.</p>
+<p>기존 방식의 GPU 가중치는 약 1,023 MiB입니다. 순차 로딩은 2c와 전체 모델 실험에 적용되며 가중치 약 423 MiB와 2 MiB 전송 버퍼를 사용합니다. 토큰마다 가중치를 다시 읽으므로 생성 속도가 느려질 수 있습니다. 연산 임시 메모리는 별도입니다.</p>
 <p>상주 실험은 ORT 세션을 생성하지 않습니다. 저장된 가중치 실험은 전체 모델 로드에서 파일 준비가 끝난 뒤 실행하세요. 파일 준비를 위해 전체 로딩이 성공할 필요는 없습니다.</p>
 <p>1d는 작은 모델 세션을 유지하면서 같은 GPU 장치에 전체 가중치를 올려 검증합니다. 작은 모델의 추가 자원은 별도 기록되며, 전체 모델 추론 성공을 뜻하지 않습니다.</p>
 <p>토크나이저 실험은 전체 로드와 같은 토크나이저를 준비하며 모델 가중치는 적재하지 않습니다. 전체 로드는 토크나이저 준비 후 가중치를 적재합니다.</p>

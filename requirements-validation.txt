@@ -1,0 +1,3 @@
+-r requirements-tools.txt
+onnxruntime==1.24.3
+tokenizers==0.22.2
