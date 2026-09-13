@@ -1,4 +1,4 @@
-import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel } from '../diagnostics.js';
+import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel, pageNavigationType, unloadLabel } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
 import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice } from './results.js';
 import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
@@ -60,10 +60,12 @@ function render() {
       (execution.modelExecution === 'streamed' ? ' · FP32 순차 로딩' : '') +
       (execution.tokenizerFormat ? ` · 토크나이저 ${execution.tokenizerFormat}` : '');
     const recovered = comparison.recoveryClassification;
+    const unload = unloadLabel(comparison);
+    const unconfirmed = unload ? `원인 미확인 · ${unload}` : '원인 미확인';
     for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 세션 없음' : execution.runtimeMode || '미기록'} · ${{ compact: '변경 항목 저장', snapshot: '전체 상태 저장' }[execution.diagnosticsMode] || '저장 방식 미기록'}`,
       recovered === 'cleanup-reentry' ? '자원 정리 중 재진입 · 정리 완료 미확인' :
-      result.interrupted ? (comparison.interruptedPhase === 'inference' ? `${inferenceLabel(comparison.interruptedInference?.phase)} 중 중단 (원인 미확인)`
-        : execution.modelSessionCreated ? '세션 생성 후 중단 (원인 미확인)' : '실행 중 중단 (원인 미확인)') :
+      result.interrupted ? (comparison.interruptedPhase === 'inference' ? `${inferenceLabel(comparison.interruptedInference?.phase)} 중 중단 (${unconfirmed})`
+        : execution.modelSessionCreated ? `세션 생성 후 중단 (${unconfirmed})` : `실행 중 중단 (${unconfirmed})`) :
       result.success ? scopeLabel(execution.completedScope) + (recovered === 'completed-run-reentry' ? ' · 완료 후 재진입' : '') : result.cancelled ? '사용자 중단' : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
@@ -80,7 +82,8 @@ function render() {
 if (state.active) {
   const diagnostic = await readRun(state.active.runId);
   const recovery = await recordRecovery(diagnostic, { visibility: document.visibilityState, experiment: state.active.kind,
-    phase: state.active.phase, navigation: state.active.navigation ?? null, lifecycle: state.active.lifecycle || [] });
+    phase: state.active.phase, navigation: state.active.navigation ?? null, lifecycle: state.active.lifecycle || [],
+    navigationType: pageNavigationType() });
   const kind = state.active.kind;
   const storage = diagnostic?.summary?.storage;
   const success = recovery?.classification !== 'cleanup-reentry' && !diagnostic?.fault && diagnostic?.cleanup?.success !== false && !diagnostic?.cleanupError && ((kind === 'load' && diagnostic?.status === 'ready') ||

@@ -141,6 +141,28 @@ test('recovery associates lifecycle with the run interval and UUID without rewri
   assert.deepEqual(recoveryEvidence({ ...run, startedAt: undefined }, { lifecycle }, 130).lifecycle, []);
 });
 
+test('recovery records unload evidence and the re-entry gap without upgrading the cause', () => {
+  const run = { runId: 'current', startedAt: 100, status: 'running', last: { stage: 'gpu-wait', timestamp: 120 } };
+  const silent = recoveryEvidence(run, { lifecycle: [], navigationType: 'reload' }, 963);
+  assert.equal(silent.unloadEvidence, 'no-unload-event');
+  assert.equal(silent.unloadObserved, false);
+  assert.equal(silent.reentryGapMs, 843);
+  assert.equal(silent.navigationType, 'reload');
+  assert.equal(silent.cause, 'unknown', 'a silent re-entry is consistent with a process kill but never proves one');
+  const summary = diagnosticSummary({ ...run, recovery: silent });
+  assert.equal(summary.unloadEvidence, 'no-unload-event');
+  assert.equal(summary.reentryGapMs, 843);
+  assert.equal(summary.navigationType, 'reload');
+  const hidden = recoveryEvidence(run, { lifecycle: [{ event: 'visibilitychange', visibility: 'hidden', timestamp: 121, runId: 'current' }] }, 130);
+  assert.equal(hidden.unloadEvidence, 'unload-observed');
+  assert.equal(hidden.unloadObserved, true);
+  const earlier = recoveryEvidence(run, { lifecycle: [{ event: 'pagehide', timestamp: 90 }] }, 130);
+  assert.equal(earlier.unloadEvidence, 'no-unload-event', 'events before the run interval do not explain this run');
+  assert.equal(recoveryEvidence({ ...run, status: 'complete' }, {}, 130).unloadEvidence, null);
+  assert.equal(recoveryEvidence({ ...run, fault: { stage: 'device-lost' } }, {}, 130).unloadEvidence, 'recorded-fault');
+  assert.equal(recoveryEvidence({ ...run, last: null }, {}, 130).reentryGapMs, null);
+});
+
 test('old zero GPU ledgers are partial and missing measurements remain unknown', () => {
   const run = { status: 'running', recovery: { classification: 'interrupted' }, last: {
     stage: 'gpu-wait', initializerName: 'embed_tokens.chunk0', destinationOffset: 24 * 2**20,

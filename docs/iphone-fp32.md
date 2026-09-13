@@ -383,6 +383,13 @@ checkpoint cannot prove the exact native crash instruction or an OOM.
 
 Recovery retains raw lifecycle hints in `lifecycleHistory`; `lifecycle` only
 contains events inside the run interval with a matching UUID when available.
+It also records `unloadEvidence` (`unload-observed` when a `pagehide` or hidden
+`visibilitychange` event fell inside the run, `no-unload-event` otherwise,
+`recorded-fault` when the worker persisted a fault), `reentryGapMs` between the
+last checkpoint and the recovering page, and the recovering page's
+`navigationType`. A silent re-entry (no unload event, a gap under a few seconds)
+matches a WebContent/GPU process termination and rules out a normal navigation,
+but `cause` stays `unknown`: only device logs establish a memory kill.
 The original worker status and fault are preserved. The UI shows interrupted
 runs and their tracking coverage, and experiment rows/export include release,
 reported device, runtime/staging, OPFS cache/migration/download counts, completed

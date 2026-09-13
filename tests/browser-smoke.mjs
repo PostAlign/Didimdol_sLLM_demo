@@ -646,7 +646,8 @@ try {
   });
   await page.reload();
   await page.locator('#rows').getByText(/gpu-wait/).waitFor();
-  assert.match(await page.locator('#rows').innerText(), /메모리 부족은 아직 확인되지 않았습니다/);
+  // The seeded pagehide precedes this run, so the re-entry is silent: the row must say so without claiming a memory kill.
+  assert.match(await page.locator('#rows').innerText(), /언로드 이벤트 없이 \d+\.\d초 뒤 다시 열림 · 탐색 유형 reload\. .*기기 기록으로만 확정됩니다/);
   assert.match(await page.locator('#rows').innerText(), /GPU 계측 부분 관측/);
   const recovery = await page.evaluate(async () => {
     const { readRun, recordRecovery } = await import('/web/sllm/diagnostics.js');
@@ -654,6 +655,9 @@ try {
     return { current: await readRun('reload-test'), legacy: await readRun('legacy-test') };
   });
   assert.equal(recovery.current.recovery.cause, 'unknown');
+  assert.equal(recovery.current.recovery.unloadEvidence, 'no-unload-event');
+  assert.equal(recovery.current.recovery.navigationType, 'reload');
+  assert.ok(recovery.current.recovery.reentryGapMs >= 0);
   assert.ok(recovery.current.recovery.lifecycle.every(event => event.timestamp >= recovery.current.startedAt));
   assert.ok(recovery.current.recovery.lifecycleHistory.some(event => event.timestamp < recovery.current.startedAt));
   assert.equal(recovery.current.last.stage, 'gpu-wait');
@@ -696,7 +700,7 @@ try {
     sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
   });
   await page.reload();
-  await page.locator('#rows').getByText('중단 (원인 미확인)').waitFor();
+  await page.locator('#rows').getByText(/중단 \(원인 미확인 · 언로드 이벤트 없이 \d+\.\d초 뒤 다시 열림 · 탐색 유형 reload\)/).waitFor();
   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).active), null);
   // Exercise the actual experiment controls, then stop during the intended idle period.
   await page.locator('#kind').selectOption('resident');

@@ -7,6 +7,38 @@ loading interrupted after 209/251 initializers; evaluation-page loading stopped
 after 247/251. Both used 8 MiB staging, nine OPFS cache hits and Asyncify, with no
 persisted GPU fault. These observations do not establish an OS-memory kill.
 
+## September 13 phone exports (release `d5e1043f51ac`, commit `673290b`)
+
+Same iPhone (iOS 26.6.2, Chrome 153), 8 MiB staging, Asyncify, resident
+execution, nine OPFS cache hits, no persisted GPU fault in any run.
+
+| UTC | Screen / experiment | Outcome |
+|---|---|---|
+| 05:00:56 | Evaluation page session create | 251/251, 1,023 MiB, `ready` |
+| 05:01:09 | Evaluation page warmup inference | interrupted at 2.0 s, 1,059 MiB GPU requested, page back after 0.5 s |
+| 05:01:34-05:07:22 | 1b, 1c (two tokenizer paths), 1d, small runtime 120 s, tokenizer | all complete |
+| 05:07:48 | 2c session-only | interrupted at 207/251 (`embed_tokens.chunk11`), 813.9 MiB completed / 853.9 MiB allocated, page back after 0.8 s |
+| 05:09:28 | 3 full load | 251/251, 1,023 MiB, `ready` |
+
+2c, 3 and the evaluation page share one load path and produced an identical ORT
+initializer order (2c's 208 entries are a prefix of the other two), the same
+upload rate (about 420 MiB/s), the same 40 MiB allocate-to-complete backlog and
+the same pending-check peak. The only code difference is that 2c skips the
+tokenizer, so 2c used less memory than the two runs that survived. Neither
+interruption left a `pagehide`/`visibilitychange` event, and both recovering
+pages appeared under one second after the last checkpoint, which matches a
+process termination rather than a navigation. Across the September 12 and 13
+exports the interrupted run changes each time (2c at 209, evaluation at 247,
+full load at 188, 2c at 207, warmup at 1,059 MiB) while every stop lies between
+740 MiB and 1,060 MiB of GPU-resident weights. Resident FP32 therefore runs at
+the device's limit with no headroom for warmup; which run crosses it depends on
+system state outside the page. Device Jetsam/WebContent logs from the same
+minutes are still required to confirm the kill. Recovery now records
+`unloadEvidence`, `reentryGapMs` and `navigationType` so this reasoning no
+longer has to be reconstructed from exports by hand. The next comparisons are
+three 2c repeats at 8 MiB, then 2c and full load with `modelExecution=streamed`
+(about 423 MiB resident), with exports and device logs kept from the same runs.
+
 This follow-up adds a comparison and lowers diagnostic persistence overhead.
 FP32 model weights, tokenizer, generation settings, evaluation inputs and graph
 optimization settings are unchanged. Native changes add lifecycle checkpoints;

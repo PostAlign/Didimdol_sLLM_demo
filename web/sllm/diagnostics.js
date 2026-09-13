@@ -107,8 +107,13 @@ export function inferenceContext(record) {
   return phase ? { phase, row: record.row ?? null, reason: null, inferenceElapsedMs: 0 } : null;
 }
 
+/** Navigation type of the page observing a recovery (reload, navigate, back_forward) when the browser exposes it. */
+export function pageNavigationType() {
+  try { return globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type ?? null; } catch { return null; }
+}
+
 export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
-  const { lifecycle = [], ...details } = context;
+  const { lifecycle = [], navigationType = null, ...details } = context;
   const startedAt = run.startedAt ?? run.milestones?.['load-start']?.timestamp;
   const cleanupPending = run.cleanup?.stage === 'cleanup-start' || (context.phase === 'cleanup' && !run.cleanup);
   // Evaluation/probe runs are separate journals that only start with a created session.
@@ -117,16 +122,36 @@ export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
   const inference = run.status === 'running' && !cleanupPending ? inferenceContext(run.last) : null;
   const completed = ['complete', 'ready'].includes(run.status);
   const terminalReentry = run.status === 'cancelled' ? 'cancelled-run-reentry' : run.status === 'failed' ? 'failed-run-reentry' : null;
-  return { ...details, observedAt, priorStatus: run.status, lastTimestamp: run.last?.timestamp ?? null,
-    classification: run.fault ? 'known-fault' : cleanupPending ? 'cleanup-reentry' : completed ? 'completed-run-reentry' : terminalReentry || 'interrupted',
+  const classification = run.fault ? 'known-fault' : cleanupPending ? 'cleanup-reentry' : completed ? 'completed-run-reentry' : terminalReentry || 'interrupted';
+  // Retain historical hints, but only associate events inside this run's time
+  // interval and, for new records, with its explicit UUID.
+  const events = lifecycle.filter(event => Number.isFinite(startedAt) && event.timestamp >= startedAt &&
+    event.timestamp <= observedAt && (!event.runId || event.runId === run.runId));
+  const lastTimestamp = run.last?.timestamp ?? null;
+  // A normal navigation or reload leaves pagehide/hidden events before the page goes away. Their absence, with the
+  // recovering page appearing shortly after the last checkpoint, matches a process termination but does not prove an
+  // OS memory kill: only device logs can. The original cause therefore stays 'unknown'.
+  const unloadObserved = events.some(event => event.event === 'pagehide' || (event.event === 'visibilitychange' && event.visibility === 'hidden'));
+  const reentryGapMs = Number.isFinite(lastTimestamp) && Number.isFinite(observedAt) ? Math.max(0, observedAt - lastTimestamp) : null;
+  const unloadEvidence = run.fault ? 'recorded-fault' : !['interrupted', 'cleanup-reentry'].includes(classification) ? null
+    : unloadObserved ? 'unload-observed' : 'no-unload-event';
+  return { ...details, observedAt, priorStatus: run.status, lastTimestamp,
+    classification,
     interruptedPhase: cleanupPending ? 'cleanup' : run.status === 'running' ? (inference ? 'inference' : sessionCreated ? 'after-session-create' : 'execution') : null,
     inference,
     cause: run.fault ? 'recorded-fault' : 'unknown',
-    // Retain historical hints, but only associate events inside this run's time
-    // interval and, for new records, with its explicit UUID.
+    unloadEvidence, unloadObserved, reentryGapMs, navigationType,
     lifecycleHistory: lifecycle,
-    lifecycle: lifecycle.filter(event => Number.isFinite(startedAt) && event.timestamp >= startedAt &&
-      event.timestamp <= observedAt && (!event.runId || event.runId === run.runId)) };
+    lifecycle: events };
+}
+
+/** Human-readable unload evidence for an interrupted run; empty when there is nothing to add. */
+export function unloadLabel(recovery) {
+  if (!recovery?.unloadEvidence || recovery.unloadEvidence === 'recorded-fault') return '';
+  if (recovery.unloadEvidence === 'unload-observed') return '페이지 이동·새로고침 이벤트 기록됨';
+  const gap = recovery.reentryGapMs == null ? '' : ` ${(recovery.reentryGapMs / 1000).toFixed(1)}초 뒤 다시 열림`;
+  const navigation = recovery.navigationType ? ` · 탐색 유형 ${recovery.navigationType}` : '';
+  return `언로드 이벤트 없이${gap}${navigation}`;
 }
 
 export function diagnosticSummary(run, sessionFallback = null) {
@@ -160,6 +185,8 @@ export function diagnosticSummary(run, sessionFallback = null) {
       run.milestones?.['session-create']?.tokenizerPrepared ?? null),
     tokenizerFormat: run.summary?.tokenizer?.tokenizerFormat ?? run.milestones?.['tokenizer-ready']?.tokenizerFormat ?? null,
     recoveryClassification: run.recovery?.classification ?? null,
+    unloadEvidence: run.recovery?.unloadEvidence ?? null, reentryGapMs: run.recovery?.reentryGapMs ?? null,
+    navigationType: run.recovery?.navigationType ?? null,
     jsMemory: last.jsMemory ?? null,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
     destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
