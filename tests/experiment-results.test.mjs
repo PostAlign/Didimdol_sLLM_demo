@@ -2,6 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executionSettings, executionEvidence, seriesSummary, isSimpleProbe, applicationOperation, canRepeat } from '../web/sllm/experiments/results.js';
 
+test('interrupted loading recovers tokenizer facts from milestones without inventing session success', () => {
+  const run = { environment: { tokenizerFormat: 'prepared' }, milestones: {
+    'tokenizer-ready': { tokenizerFormat: 'prepared' }, 'session-create': { tokenizerPrepared: true },
+  } };
+  const evidence = executionEvidence({ kind: 'load', success: false }, run);
+  assert.equal(evidence.tokenizerPrepared, true);
+  assert.equal(evidence.tokenizerFormat, 'prepared');
+  assert.equal(evidence.modelSessionCreated, null);
+  assert.equal(evidence.completedScope, null);
+  assert.equal(executionSettings('session-only', { idleSeconds: 120 }).idleSeconds, 120);
+});
+
 test('combined residency requires real WASM, retained small session, and the same device', () => {
   const result = { kind: 'runtime-resident', success: true, mode: 'asyncify', allBytesUsed: true,
     inferenceVerified: true, ortWasmInstantiated: true, smallSessionRetained: true, sameDevice: true, modelSessionCreated: false };

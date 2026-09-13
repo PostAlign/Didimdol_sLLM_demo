@@ -74,7 +74,8 @@ export const runKey = runId => `run:${runId}`;
 const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-verified', 'weights-prepared',
   'resident-start',
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
-  'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'ready', 'complete', 'failed', 'cancelled']);
+  'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'session-idle-start', 'session-idle-complete',
+  'ready', 'complete', 'failed', 'cancelled']);
 const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error',
   'tokenizer-error', 'template-error', 'evaluation-data-error']);
 const isPreparation = stage => /^(tokenizer|template|evaluation-data)-/.test(stage);
@@ -96,8 +97,14 @@ export const gpuOperationContext = record => ({ observedDuring: record?.stage,
 export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
   const { lifecycle = [], ...details } = context;
   const startedAt = run.startedAt ?? run.milestones?.['load-start']?.timestamp;
+  const cleanupPending = run.cleanup?.stage === 'cleanup-start' || (context.phase === 'cleanup' && !run.cleanup);
+  const sessionCreated = !!run.milestones?.['session-create-complete'] || run.summary?.modelSessionCreated === true;
+  const completed = ['complete', 'ready'].includes(run.status);
+  const terminalReentry = run.status === 'cancelled' ? 'cancelled-run-reentry' : run.status === 'failed' ? 'failed-run-reentry' : null;
   return { ...details, observedAt, priorStatus: run.status, lastTimestamp: run.last?.timestamp ?? null,
-    classification: run.fault ? 'known-fault' : 'interrupted', cause: run.fault ? 'recorded-fault' : 'unknown',
+    classification: run.fault ? 'known-fault' : cleanupPending ? 'cleanup-reentry' : completed ? 'completed-run-reentry' : terminalReentry || 'interrupted',
+    interruptedPhase: cleanupPending ? 'cleanup' : run.status === 'running' ? (sessionCreated ? 'after-session-create' : 'execution') : null,
+    cause: run.fault ? 'recorded-fault' : 'unknown',
     // Retain historical hints, but only associate events inside this run's time
     // interval and, for new records, with its explicit UUID.
     lifecycleHistory: lifecycle,
@@ -117,7 +124,7 @@ export function diagnosticSummary(run, sessionFallback = null) {
   // Old schema-3 exports can contain apparently valid zero ledgers. Do not
   // upgrade those to complete, or invent measurements for schema-2 exports.
   if (!ledger?.tracking && allocated > 0 && ledger && (ledger.bufferCount === 0 || ledger.requestedCurrent === 0)) trackingStatus = 'partial';
-  const interrupted = run.status === 'running' && !!run.recovery;
+  const interrupted = !!run.recovery && (run.status === 'running' || run.recovery.classification === 'cleanup-reentry');
   const storage = last.storage ?? session?.storage
     ?? [...(run.records || [])].reverse().find(record => record.storage)?.storage
     ?? run.milestones?.['weights-prepared']?.storage ?? null;
@@ -125,6 +132,10 @@ export function diagnosticSummary(run, sessionFallback = null) {
     file: fault?.file ?? last.file ?? null, observedDuring: fault?.observedDuring ?? last.observedDuring ?? null,
     loadOrder: run.environment?.loadOrder ?? session?.loadOrder ?? null,
     tokenizer: run.summary?.tokenizer ?? session?.tokenizer ?? run.milestones?.['tokenizer-ready'] ?? null,
+    tokenizerPrepared: run.summary?.tokenizerPrepared ?? (run.milestones?.['tokenizer-ready'] ? true :
+      run.milestones?.['session-create']?.tokenizerPrepared ?? null),
+    tokenizerFormat: run.summary?.tokenizer?.tokenizerFormat ?? run.milestones?.['tokenizer-ready']?.tokenizerFormat ?? null,
+    recoveryClassification: run.recovery?.classification ?? null,
     jsMemory: last.jsMemory ?? null,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,
     destinationOffset: fault?.destinationOffset ?? progress.destinationOffset ?? null, faultStage: fault?.stage ?? null,
@@ -152,7 +163,7 @@ export const trackingLabel = status => ({ complete: '정상', partial: '부분 �
 
 /** Recovery is evidence from a later page, never a rewrite of the interrupted worker's last/fault. */
 export async function recordRecovery(run, context = {}) {
-  if (!run?.runId || (run.status !== 'running' && !run.fault)) return null;
+  if (!run?.runId) return null;
   const recovery = recoveryEvidence(run, context);
   await saveCheckpoint(recovery, `recovery:${run.runId}`);
   return recovery;

@@ -17,13 +17,13 @@ export function releaseBpeSource(tokenizer) {
   }
   const runtimeConfig = {};
   for (const key of Object.keys(config)) {
-    if (key !== 'vocab' && key !== 'merges') runtimeConfig[key] = config[key];
+    if (key !== 'vocab' && key !== 'merges' && key !== '_didimdolPreparedBpe') runtimeConfig[key] = config[key];
   }
   model.config = runtimeConfig;
   model.merges = null;
   core.tokenizer = { ...source, model: runtimeConfig };
   if ('_tokenizerJSON' in tokenizer) tokenizer._tokenizerJSON = core.tokenizer;
-  return { sourceReleased: true, rankKeyFormat: model.rankKeyFormat,
+  return { sourceReleased: true, rankKeyFormat: model.rankKeyFormat, preparedFormat: model.preparedFormat ?? null,
     mergeCount: model.mergeCount, numericRankCount: model.bpe_ranks.size,
     rankTableBytes: model.bpe_ranks.keys.byteLength + model.bpe_ranks.ranks.byteLength,
     fallbackRankCount: model.fallback_ranks.size };

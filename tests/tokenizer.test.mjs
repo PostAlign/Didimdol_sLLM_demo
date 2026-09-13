@@ -10,8 +10,22 @@ import { prepareTokenizer, readPreparationFile, jsMemory } from '../web/sllm/tok
 import { RunDiagnostics, diagnosticSummary, recoveryEvidence } from '../web/sllm/diagnostics.js';
 import { releaseBpeSource } from '../web/sllm/tokenizer-memory.js';
 import { makeRouge1 } from '../web/sllm/rouge.js';
+import { serializeTokenizer } from '../tools/prepare-tokenizer.mjs';
+import { PREPARED_TOKENIZER_FORMAT, validatePreparedManifest, decodePreparedVocabulary, decodePreparedRanks } from '../web/sllm/prepared-tokenizer.js';
+import { createHash } from 'node:crypto';
 
 const root = path.resolve(import.meta.dirname, '..');
+const assetInfo = value => ({ bytes: value.length, sha256: createHash('sha256').update(value).digest('hex') });
+
+function preparedFixture(tokenizer, data, config) {
+  const sourceBytes = { 'tokenizer.json': Buffer.from(JSON.stringify(data)), 'tokenizer_config.json': Buffer.from(JSON.stringify(config)) };
+  const sources = Object.fromEntries(Object.entries(sourceBytes).map(([name, value]) => [name, assetInfo(value)]));
+  const assets = serializeTokenizer(tokenizer, data, sources);
+  const files = { ...assets, ...sourceBytes };
+  const build = { tokenizer: { preparedFormat: PREPARED_TOKENIZER_FORMAT }, assets: Object.fromEntries(Object.entries(files)
+    .map(([name, value]) => [(name in sourceBytes ? 'tokenizer/' : 'web/vendor/tokenizer/') + name, assetInfo(value)])) };
+  return { assets, files, build };
+}
 
 test('patched class selection, tokens, decoding and chat templates match upstream on all evaluation rows', async t => {
   await mkdir(path.join(root, '.work'), { recursive: true });
@@ -27,6 +41,19 @@ test('patched class selection, tokens, decoding and chat templates match upstrea
   const config = JSON.parse(await readFile(path.join(root, 'tokenizer/tokenizer_config.json'), 'utf8'));
   const baseline = new GemmaTokenizer(data, config);
   const patched = AutoTokenizer.from_json(data, config);
+  const fixture = preparedFixture(AutoTokenizer.from_json(data, config), data, config), requests = [], checkpoints = [];
+  const { tokenizer: prepared, summary } = await prepareTokenizer({ format: 'prepared', build: fixture.build,
+    baseURL: 'https://example.com/web/sllm/worker.js', createTokenizer: (data, config) => AutoTokenizer.from_json(data, config),
+    checkpoint: async record => checkpoints.push(record), fetchFile: async url => {
+      const name = String(url).split('/').at(-1); requests.push(name); return new Response(fixture.files[name]);
+    } });
+  assert.equal(summary.tokenizerFormat, 'prepared');
+  assert.equal(summary.memoryLayout.preparedFormat, PREPARED_TOKENIZER_FORMAT);
+  assert.equal(requests.includes('tokenizer.json'), false);
+  assert.equal(prepared._tokenizerJSON.model._didimdolPreparedBpe, undefined);
+  assert.equal(prepared._tokenizer.model.merges, null);
+  assert.equal(prepared._tokenizer.model.bpe_ranks.keys.buffer, prepared._tokenizer.model.bpe_ranks.ranks.buffer);
+  assert.equal(checkpoints.some(record => record.file === 'tokenizer.json'), false);
   const layout = releaseBpeSource(patched);
   assert.equal(layout.sourceReleased, true);
   assert.equal(layout.mergeCount, 514906);
@@ -40,30 +67,34 @@ test('patched class selection, tokens, decoding and chat templates match upstrea
   for (const [left, right] of data.model.merges) {
     assert.equal(patched._tokenizer.model.rank_for_pair(left, right),
       baseline._tokenizer.model.bpe_ranks.get(JSON.stringify([left, right])), 'all merge ranks, including hash collisions');
+    assert.equal(prepared._tokenizer.model.rank_for_pair(left, right), patched._tokenizer.model.rank_for_pair(left, right));
   }
   assert.equal(patched.constructor.name, 'GemmaTokenizer');
   assert.equal(AutoTokenizer.from_json(data, { ...config, tokenizer_class: 'GemmaTokenizerFast' }).constructor.name, 'GemmaTokenizer');
   assert.deepEqual(patched.all_special_ids, baseline.all_special_ids);
   assert.deepEqual(patched.all_special_tokens, baseline.all_special_tokens);
+  assert.deepEqual(prepared.all_special_ids, baseline.all_special_ids);
+  assert.deepEqual(prepared.all_special_tokens, baseline.all_special_tokens);
   const rows = (await readFile(path.join(root, 'web/sllm/data.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   const chat_template = await readFile(path.join(root, 'tokenizer/chat_template.jinja'), 'utf8');
   const examples = ['', '안녕하세요. 한글과 English 123', '  공백\t\n\n유지  ', '😀 👩‍💻 e\u0301 가나다',
     '<bos><start_of_turn>user\n질문<end_of_turn>\n', ...rows.flatMap(row => row.messages.map(message => message.content))];
-  for (const text of examples) {
-    const expected = baseline.encode(text), actual = patched.encode(text);
+  for (const variant of [patched, prepared]) for (const text of examples) {
+    const expected = baseline.encode(text), actual = variant.encode(text);
     assert.deepEqual(actual, expected, text.slice(0, 60));
-    assert.equal(patched.decode(actual), baseline.decode(expected));
-    assert.equal(patched.decode(actual, { skip_special_tokens: true }), baseline.decode(expected, { skip_special_tokens: true }));
-    assert.deepEqual(patched.tokenize(text, { add_special_tokens: false }), baseline.tokenize(text, { add_special_tokens: false }));
+    assert.equal(variant.decode(actual), baseline.decode(expected));
+    assert.equal(variant.decode(actual, { skip_special_tokens: true }), baseline.decode(expected, { skip_special_tokens: true }));
+    assert.deepEqual(variant.tokenize(text, { add_special_tokens: false }), baseline.tokenize(text, { add_special_tokens: false }));
   }
-  const expectedRouge = makeRouge1(baseline), actualRouge = makeRouge1(patched);
-  for (const row of rows) {
+  const expectedRouge = makeRouge1(baseline);
+  for (const variant of [patched, prepared]) for (const row of rows) {
+    const actualRouge = makeRouge1(variant);
     const reference = row.messages.at(-1).content;
     assert.deepEqual(actualRouge('견인 치료 123 😀', reference), expectedRouge('견인 치료 123 😀', reference));
     const messages = row.messages.slice(0, -1);
     const options = { chat_template, add_generation_prompt: true, return_dict: true };
     const expected = baseline.apply_chat_template(messages, options);
-    const actual = patched.apply_chat_template(messages, options);
+    const actual = variant.apply_chat_template(messages, options);
     for (const key of Object.keys(expected)) {
       assert.deepEqual(actual[key].dims, expected[key].dims);
       assert.deepEqual(actual[key].data, expected[key].data);
@@ -104,6 +135,40 @@ test('build patch rejects changed source or dependency version', async () => {
   const source = await readFile(path.join(root, 'node_modules/@huggingface/tokenizers/dist/tokenizers.mjs'), 'utf8');
   assert.throws(() => patchTokenizerSource('tokenizers', source, '0.1.4'), /source\/version mismatch/);
   assert.throws(() => patchTokenizerSource('tokenizers', source + '\n', '0.1.3'), /source\/version mismatch/);
+});
+
+test('prepared assets preserve BOM tokens and reject corrupt, truncated, incompatible or mismatched data', async () => {
+  const source = await readFile(path.join(root, 'node_modules/@huggingface/tokenizers/dist/tokenizers.mjs'), 'utf8');
+  const { Tokenizer } = await import(`data:text/javascript;base64,${Buffer.from(patchTokenizerSource('tokenizers', source, '0.1.3')).toString('base64')}`);
+  const data = { model: { type: 'BPE', vocab: { a: 0, b: 1, ab: 2, '\uFEFFa': 3 }, merges: [['a', 'b'], ['a', 'b']] },
+    normalizer: null, pre_tokenizer: null, post_processor: null, decoder: null, added_tokens: [] };
+  const { files, build } = preparedFixture({ _tokenizer: new Tokenizer(data, {}) }, data, {});
+  const array = value => value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  const manifest = JSON.parse(files['tokenizer-prepared.json']);
+  assert.equal(decodePreparedVocabulary(array(files['tokenizer-vocab.bin']), 4)[3], '\uFEFFa');
+  const sources = Object.fromEntries(['tokenizer.json', 'tokenizer_config.json'].map(file => [file, build.assets[`tokenizer/${file}`]]));
+  assert.throws(() => validatePreparedManifest({ ...manifest, format: 'future' }, sources), /Unsupported/);
+  assert.throws(() => validatePreparedManifest({ ...manifest, sources: {} }, sources), /source mismatch/);
+  assert.throws(() => validatePreparedManifest({ ...manifest, capacity: 3 }, sources), /layout/);
+  assert.throws(() => decodePreparedVocabulary(new ArrayBuffer(2), 4), /Truncated/);
+  const corruptOffsets = array(files['tokenizer-vocab.bin']); new DataView(corruptOffsets).setUint32(4, 0xffffffff, true);
+  assert.throws(() => decodePreparedVocabulary(corruptOffsets, 4), /range/);
+  assert.throws(() => decodePreparedRanks(new ArrayBuffer(4), manifest), /size/);
+  const corruptRanks = array(files['tokenizer-ranks.bin']); new Uint32Array(corruptRanks, manifest.capacity * 8).fill(0);
+  assert.throws(() => decodePreparedRanks(corruptRanks, manifest), /count/);
+  for (const broken of ['tokenizer-prepared.json', 'tokenizer-vocab.bin', 'tokenizer-ranks.bin']) {
+    const altered = Buffer.from(files[broken]); altered[altered.length - 1] ^= 1;
+    const run = new RunDiagnostics('corrupt-prepared', { diagnosticsMode: 'snapshot' }, async () => true);
+    await assert.rejects(prepareTokenizer({ format: 'prepared', build, baseURL: 'https://example.com/web/sllm/worker.js',
+      checkpoint: run.checkpoint, createTokenizer: () => assert.fail('corrupt data must never construct a tokenizer'),
+      fetchFile: async url => { const name = String(url).split('/').at(-1); return new Response(name === broken ? altered : files[name]); },
+    }), /hash mismatch/);
+    assert.equal(run.state.fault.file, broken);
+    assert.equal(run.state.fault.observedDuring, 'tokenizer-verify-start');
+  }
+  let constructed = false;
+  await assert.rejects(prepareTokenizer({ format: 'prepared', build: { tokenizer: {} }, createTokenizer: () => { constructed = true; } }), /Rebuild/);
+  assert.equal(constructed, false);
 });
 
 test('preparation awaits durable markers and retains file stages after model events evict recent records', async () => {

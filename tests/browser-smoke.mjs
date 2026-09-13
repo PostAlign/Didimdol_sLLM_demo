@@ -163,6 +163,9 @@ try {
     await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
     const stored = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')));
     const result = stored.results.at(-1);
+    assert.equal(result.navigation.reason, 'experiment-start');
+    assert.equal(result.navigation.runId, result.runId);
+    assert.equal(new URL(page.url()).searchParams.get('next'), result.navigation.id);
     assert.equal(result.success, true);
     assert.equal(result.execution.completedScope, 'tokenizer-preparation');
     assert.equal(result.execution.loadOrder, 'tokenizer-only');
@@ -181,7 +184,8 @@ try {
     assert.equal(run.milestones.ready, undefined);
     assert.deepEqual(modelRequests, [], 'tokenizer diagnostic must not fetch model weights or instantiate WASM');
     results.push({ id: 'tokenizer-ui', success: true, tokenizer: run.summary.tokenizer,
-      preparation: run.preparation, noModelOrWasmRequests: true });
+      preparation: run.preparation, persistence: run.persistence, diagnosticCharacters: JSON.stringify(run).length,
+      noModelOrWasmRequests: true });
     await page.evaluate(async runId => {
       const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
       state.active = { kind: 'tokenizer', runId, startedAt: Date.now() };
@@ -220,6 +224,53 @@ try {
     });
     assert.equal(snapshot.persistence.mode, 'snapshot');
     assert.equal(snapshot.summary.tokenizerPrepared, true);
+    const preparedRequests = [];
+    page.on('request', request => { if (/tokenizer.*\.(json|bin)$/.test(request.url())) preparedRequests.push(request.url()); });
+    await page.locator('#diagnosticsMode').selectOption('compact');
+    await page.locator('#tokenizerFormat').selectOption('prepared');
+    assert.equal(new URL(await page.locator('#evaluationLink').getAttribute('href')).searchParams.get('tokenizerFormat'), 'prepared');
+    await page.locator('#start').click();
+    await page.locator('#status').getByText('토크나이저 준비 완료', { exact: true }).waitFor({ timeout: 60000 });
+    const prepared = await page.evaluate(async () => {
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      return (await import('/web/sllm/diagnostics.js')).readRun(state.results.at(-1).runId);
+    });
+    assert.equal(prepared.summary.tokenizer.tokenizerFormat, 'prepared');
+    assert.equal(prepared.summary.tokenizer.memoryLayout.preparedFormat, 'didimdol-bpe-v1');
+    assert.equal(preparedRequests.some(url => url.endsWith('/tokenizer/tokenizer.json')), false);
+    assert.ok(preparedRequests.some(url => url.endsWith('/tokenizer-ranks.bin')));
+    assert.deepEqual(modelRequests, []);
+    results.push({ id: 'prepared-tokenizer-ui', success: true, summary: prepared.summary, persistence: prepared.persistence,
+      diagnosticCharacters: JSON.stringify(prepared).length });
+    const brokenRanks = Buffer.from(await readFile(path.join(root, 'web/vendor/tokenizer/tokenizer-ranks.bin')));
+    brokenRanks[0] ^= 1;
+    await page.route('**/vendor/tokenizer/tokenizer-ranks.bin', route => route.fulfill({ body: brokenRanks }));
+    await page.locator('#start').click();
+    await page.locator('#status').getByText('실험 실패 · 진단 JSON을 저장해 주세요.').waitFor({ timeout: 60000 });
+    assert.match(await page.locator('#last').innerText(), /hash mismatch/);
+    assert.equal(preparedRequests.some(url => url.endsWith('/tokenizer/tokenizer.json')), false, 'a corrupt prepared asset cannot fall back to JSON');
+    await page.unroute('**/vendor/tokenizer/tokenizer-ranks.bin');
+    results.push({ id: 'prepared-tokenizer-corruption', success: true });
+    // A saved model result does not establish that an interrupted cleanup finished.
+    await page.evaluate(async () => {
+      const { RunDiagnostics, saveCheckpoint } = await import('/web/sllm/diagnostics.js');
+      const run = new RunDiagnostics('cleanup-reentry');
+      await run.finish('complete', { modelSessionCreated: true, tokenizerPrepared: false });
+      await saveCheckpoint({ stage: 'cleanup-start', startedAt: Date.now() }, 'cleanup:cleanup-reentry');
+      const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+      state.active = { kind: 'session-only', runId: 'cleanup-reentry', phase: 'cleanup', startedAt: run.state.startedAt };
+      sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+    });
+    await page.reload();
+    await page.locator('#rows').getByText('자원 정리 중 재진입 · 정리 완료 미확인').waitFor();
+    const cleanupRecovery = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).results.at(-1));
+    assert.equal(cleanupRecovery.interrupted, true);
+    assert.equal(cleanupRecovery.success, false);
+    assert.equal(cleanupRecovery.execution.modelSessionCreated, true);
+    assert.equal(cleanupRecovery.execution.completedScope, null);
+    assert.deepEqual(modelRequests, []);
+    results.push({ id: 'cleanup-reentry-ui', success: true });
+    await page.locator('#tokenizerFormat').selectOption('json');
     // Cancel while the application worker awaits a file read, then recover the
     // persisted cancellation. Native-session cleanup has a separate deadline test.
     let releaseTokenRead;
@@ -275,54 +326,59 @@ try {
         } else await route.continue();
       }
     });
-    const result = await page.evaluate(async origin => {
-      const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
-      const worker = new Worker(asset('web/sllm/worker.js'), { type: 'module' });
-      const loadRunId = crypto.randomUUID();
-      const probeRunId = crypto.randomUUID();
-      return await new Promise((resolve, reject) => {
-        let sessionResult, probeResult;
-        const timer = setTimeout(() => { worker.terminate(); reject(new Error('App load/probe timed out')); }, 600000);
-        worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
-        worker.onmessage = async ({ data }) => {
-          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 2, runId: loadRunId });
-          if (data.type === 'session-result') sessionResult = data.result;
-          if (data.type === 'fatal') { clearTimeout(timer); worker.terminate(); reject(new Error(data.error)); }
-          if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2 });
-          if (data.type === 'probe-result') { probeResult = data.result; worker.postMessage({ type: 'dispose' }); }
-          if (data.type === 'disposed') {
-            clearTimeout(timer); worker.terminate();
-            if (data.error) reject(new Error(data.error));
-            else {
-              try {
-                const { readRun } = await import(asset('web/sllm/diagnostics.js'));
-                const run = await readRun(probeRunId);
-                const loaded = await readRun(loadRunId);
-                resolve({ id: 'app-from-pretrained', ...sessionResult, ...probeResult, cleanupVerified: true,
-                  loadStatus: loaded.status, loadMilestones: loaded.milestones,
-                  probeEnvironment: run.environment });
-              } catch (error) { reject(error); }
+    let result;
+    for (const format of ['json', 'prepared']) {
+      result = await page.evaluate(async ({ origin, format }) => {
+        const { asset } = await (await import(`${origin}/web/sllm/ort-runtime.js`)).runtimeRelease();
+        const worker = new Worker(asset('web/sllm/worker.js'), { type: 'module' });
+        const loadRunId = crypto.randomUUID();
+        const probeRunId = crypto.randomUUID();
+        return await new Promise((resolve, reject) => {
+          let sessionResult, probeResult;
+          const timer = setTimeout(() => { worker.terminate(); reject(new Error('App load/probe timed out')); }, 600000);
+          worker.onerror = e => { clearTimeout(timer); worker.terminate(); reject(new Error(e.message)); };
+          worker.onmessage = async ({ data }) => {
+            if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', stagingMiB: 2, runId: loadRunId,
+              environment: { tokenizerFormat: format } });
+            if (data.type === 'session-result') sessionResult = data.result;
+            if (data.type === 'fatal') { clearTimeout(timer); worker.terminate(); reject(new Error(data.error)); }
+            if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2 });
+            if (data.type === 'probe-result') { probeResult = data.result; worker.postMessage({ type: 'dispose' }); }
+            if (data.type === 'disposed') {
+              clearTimeout(timer); worker.terminate();
+              if (data.error) reject(new Error(data.error));
+              else {
+                try {
+                  const { readRun } = await import(asset('web/sllm/diagnostics.js'));
+                  const run = await readRun(probeRunId);
+                  const loaded = await readRun(loadRunId);
+                  resolve({ id: `app-from-pretrained-${format}`, ...sessionResult, ...probeResult, cleanupVerified: true,
+                    loadStatus: loaded.status, loadMilestones: loaded.milestones,
+                    probeEnvironment: run.environment });
+                } catch (error) { reject(error); }
+              }
             }
-          }
-        };
-      });
-    }, origin);
-    results.push(result);
-    console.log(JSON.stringify(result, null, 2));
-    assert.equal(result.success, true, result.error);
-    assert.equal(result.metrics.cpuStagingPeak, 2 * 2**20);
-    assert.equal(result.probeEnvironment.stagingMiB, 2, 'evaluation diagnostics keep the loaded session settings');
-    assert.deepEqual(result.outputs.map(output => output.promptLen), [35, 266]);
-    assert.deepEqual(result.outputs.map(output => output.tokens), [[238789, 236764], [238789, 236764]], 'recorded FP32 real-prompt baseline');
-    assert.equal(result.metrics.loadedInitializerCount, 251);
-    assert.equal(result.loadStatus, 'ready');
-    assert.equal(result.loadOrder, 'tokenizer-before-session');
-    assert.ok(result.loadMilestones['tokenizer-ready'].timestamp < result.loadMilestones['session-create'].timestamp);
-    assert.equal(result.loadMilestones['tokenizer-ready'].vocabSize, 262145);
-    assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
-    assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
-    assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
-    assert.ok(result.timings.modelLoadCallMs >= 0);
+          };
+        });
+      }, { origin, format });
+      results.push(result);
+      console.log(JSON.stringify(result, null, 2));
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.metrics.cpuStagingPeak, 2 * 2**20);
+      assert.equal(result.probeEnvironment.stagingMiB, 2, 'evaluation diagnostics keep the loaded session settings');
+      assert.deepEqual(result.outputs.map(output => output.promptLen), [35, 266]);
+      assert.deepEqual(result.outputs.map(output => output.tokens), [[238789, 236764], [238789, 236764]], 'recorded FP32 real-prompt baseline');
+      assert.equal(result.metrics.loadedInitializerCount, 251);
+      assert.equal(result.loadStatus, 'ready');
+      assert.equal(result.loadOrder, 'tokenizer-before-session');
+      assert.ok(result.loadMilestones['tokenizer-ready'].timestamp < result.loadMilestones['session-create'].timestamp);
+      assert.equal(result.loadMilestones['tokenizer-ready'].vocabSize, 262145);
+      assert.equal(result.metrics.gpuWeightUploaded, result.metrics.totalExternalTensorBytes);
+      assert.equal(result.sessionMetrics?.gpuLedger?.tracking?.status || result.gpuLedger?.tracking?.status, 'complete');
+      assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
+      assert.ok(result.timings.modelLoadCallMs >= 0);
+      assert.equal(result.loadMilestones['tokenizer-ready'].tokenizerFormat, format);
+    }
     // Exercise A/B/C through the actual UI, sharing only verified OPFS storage.
     // Every case creates a fresh page/worker and uses the production JS imports.
     await page.goto(`${origin}/web/sllm/experiments/index.html`);
@@ -332,6 +388,7 @@ try {
       await page.locator('#kind').selectOption(kind);
       await page.locator('#staging').selectOption('2');
       await page.locator('#repeats').selectOption('1');
+      if (kind === 'session-only') await page.locator('#sessionIdle').selectOption(process.env.TEST_SESSION_IDLE || '0');
       requests.length = 0;
       const priorCount = await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2') || '{}').results?.length || 0);
       await page.locator('#start').click();
@@ -369,7 +426,13 @@ try {
       assert.equal(comparison.execution.ortJavaScriptLoaded, true);
       assert.equal(comparison.execution.ortWasmInstantiated, ['session-only', 'runtime-resident'].includes(kind));
       assert.equal(comparison.execution.completedScope, { 'resident-opfs': 'gpu-residency',
-        'resident-opfs-tokenizer': 'tokenizer-and-gpu-residency', 'runtime-resident': 'runtime-and-gpu-residency', 'session-only': 'model-session' }[kind]);
+        'resident-opfs-tokenizer': 'tokenizer-and-gpu-residency', 'runtime-resident': 'runtime-and-gpu-residency',
+        'session-only': process.env.TEST_SESSION_IDLE === '120' ? 'model-session-and-idle' : 'model-session' }[kind]);
+      if (kind === 'session-only' && process.env.TEST_SESSION_IDLE === '120') {
+        assert.ok(run.milestones['session-idle-complete'].idleElapsedMs >= 120000);
+        assert.ok(run.milestones['session-idle-complete'].gpuLedger.requestedCurrent >= result.metrics.totalExternalTensorBytes);
+        assert.equal(comparison.execution.idleAcceptanceCompleted, true);
+      }
       assert.equal(requests.some(url => url.endsWith('/tokenizer/tokenizer.json')), kind === 'resident-opfs-tokenizer');
       assert.equal(requests.some(url => url.endsWith('.wasm')), ['session-only', 'runtime-resident'].includes(kind));
       if (kind !== 'session-only') assert.equal(requests.some(url => url.includes('huggingface.co')), false);
@@ -390,6 +453,38 @@ try {
       results.push({ id: `comparison-${kind}`, ...exported, recoveryVerified: true });
       console.log(JSON.stringify({ id: `comparison-${kind}`, success: true, execution: comparison.execution,
         uploadedBytes: comparison.comparison.gpuQueueCompletedBytes, storage: comparison.comparison.storage }));
+      if (kind === 'session-only') {
+        await page.locator('#sessionIdle').selectOption('120');
+        await page.locator('#start').click();
+        await page.locator('#status').getByText('세션 생성 완료 · 세션을 유지하며 관찰 중…', { exact: true }).waitFor({ timeout: 600000 });
+        // Playwright's waitForFunction predicate is synchronous; a Promise is
+        // truthy even when it resolves false. Await the durable read explicitly.
+        await page.evaluate(async () => {
+          const { readRun } = await import('/web/sllm/diagnostics.js');
+          for (let attempt = 0; attempt < 100; attempt++) {
+            const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+            const run = await readRun(state.active?.runId);
+            if (run?.milestones?.['session-idle-start']) return;
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          throw new Error('Session observation start was not persisted');
+        });
+        await page.locator('#stop').click();
+        await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 15000 });
+        const stopped = await page.evaluate(async () => {
+          const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+          const result = state.results.at(-1);
+          return { result, run: await (await import('/web/sllm/diagnostics.js')).readRun(result.runId) };
+        });
+        results.push({ id: 'session-observation-cancel', result: stopped.result, run: stopped.run });
+        assert.equal(stopped.run.status, 'cancelled');
+        assert.equal(stopped.run.cleanup?.success, true, JSON.stringify({ result: stopped.result, last: stopped.run.last, summary: stopped.run.summary, cleanup: stopped.run.cleanup }));
+        assert.equal(stopped.run.cleanup.gpuLedger.requestedCurrent, 0);
+        assert.equal(stopped.result.execution.modelSessionCreated, true);
+        assert.equal(stopped.result.execution.idleAcceptanceCompleted, false);
+        assert.equal(stopped.run.milestones['session-idle-complete'], undefined);
+        results.at(-1).success = true;
+      }
     }
     await page.close();
   }
@@ -660,13 +755,24 @@ try {
   // A repeated experiment must not silently cross a deployment boundary.
   await page.evaluate(() => {
     const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
-    state.continue = { kind: 'load', remaining: 2, mode: 'asyncify', stagingMiB: 4, releaseId: '0'.repeat(64) };
+    state.continue = { kind: 'load', remaining: 2, mode: 'asyncify', stagingMiB: 4, releaseId: '0'.repeat(64),
+      navigation: { id: 'repeat-test', reason: 'repeat', timestamp: Date.now() } };
     sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
   });
-  await page.goto(`${origin}/web/sllm/experiments/index.html?next=1`);
+  await page.goto(`${origin}/web/sllm/experiments/index.html?next=repeat-test`);
   await page.locator('#status').getByText('실험 실패 · 진단 JSON을 저장해 주세요.').waitFor();
   assert.match(await page.locator('#last').innerText(), /반복 실행 중 빌드가 변경/);
   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).active), null);
+  await page.evaluate(() => {
+    const state = JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2'));
+    state.continue = { kind: 'load', remaining: 1, navigation: { id: 'expected-navigation' } };
+    sessionStorage.setItem('didimdol.device-experiments.v2', JSON.stringify(state));
+  });
+  modelRequests.length = 0;
+  await page.goto(`${origin}/web/sllm/experiments/index.html?next=unrelated`);
+  await page.locator('#status').getByText('예정된 페이지 이동을 확인하지 못해 자동 실행을 중단했습니다.', { exact: false }).waitFor();
+  assert.deepEqual(modelRequests, []);
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('didimdol.device-experiments.v2')).continue), null);
   results.push({ id: 'diagnostic-ui', success: true, tabIsolation: true, recoveryVerified: true, stopExportVerified: true });
 } finally {
   await mkdir(path.join(root, 'test-results'), { recursive: true });

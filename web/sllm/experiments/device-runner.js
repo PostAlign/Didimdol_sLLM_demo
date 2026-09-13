@@ -8,24 +8,35 @@ let state;
 try { state = JSON.parse(sessionStorage.getItem(key)); } catch {}
 state ||= { results: [], active: null, device: '', mode: 'asyncify' };
 const save = () => sessionStorage.setItem(key, JSON.stringify(state));
-let worker, sessionResult, evaluationCount = 0;
+let worker, sessionResult, evaluationCount = 0, finishing = false;
+const controlIds = ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle'];
 $('device').value = state.device; $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
 $('diagnosticsMode').value = state.diagnosticsMode || 'compact';
+$('tokenizerFormat').value = state.tokenizerFormat || 'json';
+$('sessionIdle').value = String(state.sessionIdle ?? 0);
 $('inspector').value = state.inspector || 'unknown';
 $('repeats').value = String(state.repeats || 1);
 $('kind').value = state.kind || 'resident';
 function updateControls() {
+  const evaluationURL = new URL('../../../index.html', location.href);
+  for (const [key, id] of [['ortMode', 'mode'], ['stagingMiB', 'staging'], ['diagnosticsMode', 'diagnosticsMode'], ['tokenizerFormat', 'tokenizerFormat']]) {
+    evaluationURL.searchParams.set(key, $(id).value);
+  }
+  $('evaluationLink').href = evaluationURL.href;
   $('start').disabled = !!state.active;
   $('export').disabled = false;
-  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind', 'diagnosticsMode']) $(id).disabled = !!state.active;
+  for (const id of controlIds) $(id).disabled = !!state.active;
   if (!state.active) {
     $('mode').disabled = isResident($('kind').value);
     $('repeats').disabled = !canRepeat($('kind').value);
     $('staging').disabled = $('kind').value === 'tokenizer';
+    $('tokenizerFormat').disabled = ['resident', 'resident-opfs', 'runtime', 'runtime-resident', 'session-only'].includes($('kind').value);
+    $('sessionIdle').disabled = $('kind').value !== 'session-only';
   }
 }
 $('kind').addEventListener('change', updateControls);
+for (const id of ['mode', 'staging', 'diagnosticsMode', 'tokenizerFormat']) $(id).addEventListener('change', updateControls);
 function render() {
   const series = seriesSummary(state.results, state.active);
   $('rows').replaceChildren(...state.results.map(result => {
@@ -39,9 +50,13 @@ function render() {
       comparison.destinationOffset == null ? null : `${mib(comparison.destinationOffset)} MiB 위치`].filter(Boolean).join(' · ') || '—';
     const idle = execution.idleRequestedSeconds === 0 ? '대기 없음'
       : `${execution.idleElapsedMs == null ? '미기록' : (execution.idleElapsedMs / 1000).toFixed(1)} / ${execution.idleRequestedSeconds ?? '?'}초`;
-    const setting = result.kind === 'tokenizer' ? '모델 세션 없음' : `${result.stagingMiB ?? '?'} MiB`;
+    const setting = (result.kind === 'tokenizer' ? '모델 세션 없음' : `${result.stagingMiB ?? '?'} MiB`) +
+      (execution.tokenizerFormat ? ` · 토크나이저 ${execution.tokenizerFormat}` : '');
+    const recovered = comparison.recoveryClassification;
     for (const value of [`${result.kind} · ${setting} · ${isResident(result.kind) ? 'ORT 세션 없음' : execution.runtimeMode || '미기록'} · ${{ compact: '변경 항목 저장', snapshot: '전체 상태 저장' }[execution.diagnosticsMode] || '저장 방식 미기록'}`,
-      result.interrupted ? '중단 (원인 미확인)' : result.success ? scopeLabel(execution.completedScope) : result.cancelled ? '사용자 중단' : '실패',
+      recovered === 'cleanup-reentry' ? '자원 정리 중 재진입 · 정리 완료 미확인' :
+      result.interrupted ? (execution.modelSessionCreated ? '세션 생성 후 중단 (원인 미확인)' : '실행 중 중단 (원인 미확인)') :
+      result.success ? scopeLabel(execution.completedScope) + (recovered === 'completed-run-reentry' ? ' · 완료 후 재진입' : '') : result.cancelled ? '사용자 중단' : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
       (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
@@ -57,10 +72,10 @@ function render() {
 if (state.active) {
   const diagnostic = await readRun(state.active.runId);
   const recovery = await recordRecovery(diagnostic, { visibility: document.visibilityState, experiment: state.active.kind,
-    lifecycle: state.active.lifecycle || [] });
+    phase: state.active.phase, navigation: state.active.navigation ?? null, lifecycle: state.active.lifecycle || [] });
   const kind = state.active.kind;
   const storage = diagnostic?.summary?.storage;
-  const success = !diagnostic?.fault && diagnostic?.cleanup?.success !== false && !diagnostic?.cleanupError && ((kind === 'load' && diagnostic?.status === 'ready') ||
+  const success = recovery?.classification !== 'cleanup-reentry' && !diagnostic?.fault && diagnostic?.cleanup?.success !== false && !diagnostic?.cleanupError && ((kind === 'load' && diagnostic?.status === 'ready') ||
     (kind === 'tokenizer' && diagnostic?.status === 'complete' && diagnostic.summary?.tokenizerPrepared && diagnostic.summary?.modelSessionCreated === false) ||
     (kind === 'session-only' && diagnostic?.status === 'complete' && diagnostic.summary?.modelSessionCreated && diagnostic.summary?.tokenizerPrepared === false) ||
     (['resident-opfs', 'resident-opfs-tokenizer', 'runtime-resident'].includes(kind) && diagnostic?.status === 'complete' &&
@@ -90,9 +105,11 @@ for (const eventName of ['pagehide', 'pageshow', 'visibilitychange']) {
     state.active.lifecycle = state.active.lifecycle.slice(-32); save();
   });
 }
-function reloadFor(config) {
+function reloadFor(config, reason = 'experiment-start', previousRunId = null) {
+  config.runId = newRunId();
+  config.navigation = { id: newRunId(), reason, previousRunId, runId: config.runId, timestamp: Date.now() };
   state.continue = config; save();
-  const url = new URL(location.href); url.searchParams.set('next', '1'); location.replace(url);
+  const url = new URL(location.href); url.searchParams.set('next', config.navigation.id); location.replace(url);
 }
 async function closeWorker(active, result) {
   if (!worker) return;
@@ -112,8 +129,10 @@ async function closeWorker(active, result) {
 }
 async function finish(result) {
   const active = state.active;
-  if (!active) return;
-  state.active = null;
+  if (!active || finishing) return;
+  finishing = true;
+  active.phase = 'cleanup'; save();
+  $('stop').disabled = true;
   await closeWorker(active, result);
   const diagnostic = await readRun(active.runId);
   if (diagnostic?.fault && !result.cancelled) { result.success = false; result.error ||= diagnostic.fault.message || diagnostic.fault.stage; }
@@ -121,6 +140,7 @@ async function finish(result) {
     execution: executionEvidence({ ...active, ...result }, diagnostic),
     durationMs: Date.now() - active.startedAt, sessionResult, comparison: diagnosticSummary(diagnostic, sessionResult) });
   if (state.results.length > 30) state.results.shift();
+  state.active = null; finishing = false;
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;
   updateControls();
@@ -129,23 +149,24 @@ async function finish(result) {
   if (result.success && active.remaining > 1) reloadFor({ kind: active.kind, remaining: active.remaining - 1,
     seriesId: active.seriesId, requestedRuns: active.requestedRuns, attemptNumber: active.attemptNumber + 1,
     diagnosticsMode: active.diagnosticsMode, mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
-    reportedDevice: active.reportedDevice, releaseId: active.releaseId });
+    tokenizerFormat: active.tokenizerFormat, idleSeconds: active.idleSeconds,
+    reportedDevice: active.reportedDevice, releaseId: active.releaseId }, 'repeat', active.runId);
 }
 async function begin(config) {
   if (state.active) return;
-  config = { diagnosticsMode: state.diagnosticsMode || 'compact', mode: state.mode, stagingMiB: 8, inspector: 'unknown', reportedDevice: state.device, ...config };
+  config = { diagnosticsMode: state.diagnosticsMode || 'compact', tokenizerFormat: state.tokenizerFormat || 'json', mode: state.mode, stagingMiB: 8, inspector: 'unknown', reportedDevice: state.device, ...config };
   config.seriesId ||= newRunId();
   config.requestedRuns ??= config.remaining || 1;
   config.attemptNumber ??= 1;
   if (isResident(config.kind)) config.mode = null;
   if (config.kind === 'tokenizer') config.stagingMiB = null;
   state.kind = config.kind; $('kind').value = config.kind;
-  const runId = newRunId();
-  state.active = { ...config, runId, runIds: [runId], startedAt: Date.now() }; save();
+  const runId = config.runId || newRunId();
+  state.active = { ...config, runId, runIds: [runId], phase: 'execution', startedAt: Date.now() }; save();
   // A stop becomes available after the initial journal write and worker creation,
   // so startup persistence cannot overwrite a just-recorded cancellation.
   $('start').disabled = true; $('stop').disabled = true;
-  for (const id of ['device', 'mode', 'staging', 'repeats', 'inspector', 'kind', 'diagnosticsMode']) $(id).disabled = true;
+  for (const id of controlIds) $(id).disabled = true;
   $('status').textContent = '실험 준비 중…';
   sessionResult = null; evaluationCount = 0;
   let release;
@@ -162,6 +183,7 @@ async function begin(config) {
   state.active.releaseId = release.build.releaseId; save();
   const environment = { reportedDevice: config.reportedDevice, userAgent: navigator.userAgent, experiment: config.kind,
     inspector: config.inspector, diagnosticsMode: config.diagnosticsMode, stagingMiB: config.stagingMiB, ...executionSettings(config.kind, config),
+    tokenizerFormat: config.tokenizerFormat, navigation: config.navigation ?? null,
     seriesId: config.seriesId, requestedRuns: config.requestedRuns, attemptNumber: config.attemptNumber };
   await saveCheckpoint({ schemaVersion: 3, runId, status: 'running', environment: { ...environment, build: buildIdentity(release.build) },
     last: { stage: 'worker-start', timestamp: Date.now() } }, runKey(runId));
@@ -181,7 +203,7 @@ async function begin(config) {
     worker.postMessage({ type, runId: id, environment });
   };
   worker.onmessage = async ({ data }) => {
-    if (!state.active) return;
+    if (!state.active || finishing) return;
     if (data.type === 'worker-ready') worker.postMessage({ type: applicationOperation(config.kind),
       device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
     if (data.type === 'preparation') $('last').textContent = JSON.stringify(data.record, null, 2);
@@ -217,15 +239,17 @@ async function begin(config) {
 $('start').onclick = () => {
   state.device = $('device').value; state.mode = $('mode').value;
   state.diagnosticsMode = $('diagnosticsMode').value;
+  state.tokenizerFormat = $('tokenizerFormat').value; state.sessionIdle = Number($('sessionIdle').value);
   state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   const kind = $('kind').value;
   state.kind = kind;
   reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : canRepeat(kind) ? state.repeats : 1,
+    tokenizerFormat: state.tokenizerFormat, ...(kind === 'session-only' ? { idleSeconds: state.sessionIdle } : {}),
     diagnosticsMode: state.diagnosticsMode, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, reportedDevice: state.device });
 };
 $('stop').onclick = async () => {
   const active = state.active;
-  if (!active) return;
+  if (!active || finishing) return;
   $('stop').disabled = true;
   if (worker) {
     worker.onmessage = null; worker.onerror = null;
@@ -248,7 +272,8 @@ $('export').onclick = async () => {
   const results = state.results.map(result => ({ ...result,
     execution: executionEvidence(result, byId.get(result.runId)) }));
   const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(), userAgent: navigator.userAgent,
-    screenSettings: { device: state.device, diagnosticsMode: state.diagnosticsMode, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats },
+    screenSettings: { device: state.device, diagnosticsMode: state.diagnosticsMode, tokenizerFormat: state.tokenizerFormat,
+      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats },
     active: state.active, results, series: seriesSummary(results, state.active),
     memoryNote: 'Logical allocation counters are not process RSS. Device logs are needed to confirm termination causes.',
     runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
@@ -256,7 +281,10 @@ $('export').onclick = async () => {
   const a = document.createElement('a'); a.href = url; a.download = 'iphone-fp32-experiments.json'; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
-if (state.continue && new URLSearchParams(location.search).has('next')) {
+if (state.continue && state.continue.navigation?.id === new URLSearchParams(location.search).get('next')) {
   const config = state.continue; state.continue = null; save();
   await begin(config);
+} else if (state.continue) {
+  state.continue = null; save();
+  $('status').textContent = '예정된 페이지 이동을 확인하지 못해 자동 실행을 중단했습니다. 실험 시작 버튼으로 다시 실행하세요.';
 }

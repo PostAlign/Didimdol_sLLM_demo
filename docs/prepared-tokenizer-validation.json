@@ -1,0 +1,236 @@
+{
+  "recordedAt": "2026-09-13T00:42:30.235650+00:00",
+  "releaseId": "4a3406fc9b713f9f137b88c2c34b0f73c71ea90a302cb5a3ce66de8ca8ba9852",
+  "appProvenance": {
+    "appCommit": "884ad1165226f8b7cefde8b3b771c886bf32944f",
+    "appDirty": true,
+    "nodeVersion": "v22.22.1"
+  },
+  "nativePatchChanged": false,
+  "tokenizerImplementation": {
+    "implementation": "compact-bpe-v2",
+    "preparedFormat": "didimdol-bpe-v1",
+    "version": "0.1.3",
+    "transformersVersion": "4.2.0",
+    "sourceSha256": "6d92e25f9576e67124b3a3f910f5cc1df95a42bde4df4f5387f62dee4554f301",
+    "autoTokenizerSourceSha256": "d1ef852e81052053c459b3c0ad424cea54cde9e078615d613cce012e43b0962a",
+    "retentionSourceSha256": "b119e0be7088a6ef6fd56e0821c510559f5f6c6c1275a0805ec77a3dc4a5f68e",
+    "patchSha256": "cc5574cad5de9d2a7521f9873ffc90eca054e141bfd7634b2ec3cffa16e2d235"
+  },
+  "assetVerification": {
+    "success": true,
+    "assets": 72
+  },
+  "unitTests": {
+    "command": "npm test",
+    "passed": 55,
+    "failed": 0
+  },
+  "browser": {
+    "initialFullRun": {
+      "command": "ORT_MODES=asyncify,jspi,stock TEST_APP_LOAD=1 TEST_FULL_MODEL=1 TEST_SESSION_IDLE=120 npm run test:browser",
+      "releaseId": "52aff8bc695c8032a77865f961f03488bbd60554cea1a5e9d9f7ed25b3f7342f",
+      "exitCode": 0,
+      "cases": 25,
+      "caseIds": [
+        "atomic-journal-recovery",
+        "smoke-asyncify",
+        "resident-asyncify",
+        "runtime-asyncify",
+        "resident-opfs-asyncify",
+        "runtime-resident-asyncify",
+        "smoke-jspi",
+        "runtime-jspi",
+        "runtime-resident-jspi",
+        "smoke-stock",
+        "tokenizer-ui",
+        "tokenizer-recovery-ui",
+        "prepared-tokenizer-ui",
+        "prepared-tokenizer-corruption",
+        "snapshot-and-cooperative-cancel",
+        "app-from-pretrained-json",
+        "app-from-pretrained-prepared",
+        "comparison-resident-opfs",
+        "comparison-resident-opfs-tokenizer",
+        "comparison-runtime-resident",
+        "comparison-session-only",
+        "Gemma-FP32-8MiB",
+        "gpu-tracking-browser",
+        "resident-corruption",
+        "diagnostic-ui"
+      ]
+    },
+    "finalTargetedRun": {
+      "command": "ORT_MODES='' TEST_APP_LOAD=1 TEST_SESSION_IDLE=0 npm run test:browser",
+      "releaseId": "4a3406fc9b713f9f137b88c2c34b0f73c71ea90a302cb5a3ce66de8ca8ba9852",
+      "exitCode": 0,
+      "cases": 17,
+      "caseIds": [
+        "atomic-journal-recovery",
+        "tokenizer-ui",
+        "tokenizer-recovery-ui",
+        "prepared-tokenizer-ui",
+        "prepared-tokenizer-corruption",
+        "cleanup-reentry-ui",
+        "snapshot-and-cooperative-cancel",
+        "app-from-pretrained-json",
+        "app-from-pretrained-prepared",
+        "comparison-resident-opfs",
+        "comparison-resident-opfs-tokenizer",
+        "comparison-runtime-resident",
+        "comparison-session-only",
+        "session-observation-cancel",
+        "gpu-tracking-browser",
+        "resident-corruption",
+        "diagnostic-ui"
+      ]
+    },
+    "finalReleaseObservation": {
+      "requestedSeconds": 120,
+      "elapsedMs": 120003.40000000596,
+      "completed": true,
+      "uploadedBytes": 1072392704,
+      "note": "The 120-second observation assertions passed on this release. A subsequent cancellation test used an async waitForFunction predicate and cancelled before worker startup. Its wait condition was corrected; the final targeted run tests actual observation cancellation."
+    },
+    "observationCancellation": {
+      "status": "cancelled",
+      "modelSessionCreated": true,
+      "observationCompleted": false,
+      "cleanupSuccess": true,
+      "cleanupMs": 62.400000005960464,
+      "gpuRequestedAfterCleanup": 0
+    },
+    "fp32Outputs": {
+      "app-from-pretrained-json": [
+        {
+          "promptLength": 35,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "promptLength": 266,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ],
+      "app-from-pretrained-prepared": [
+        {
+          "promptLength": 35,
+          "tokens": [
+            238789,
+            236764
+          ]
+        },
+        {
+          "promptLength": 266,
+          "tokens": [
+            238789,
+            236764
+          ]
+        }
+      ]
+    },
+    "tokenizerDiagnosticCost": {
+      "tokenizer-ui": {
+        "persistence": {
+          "mode": "compact",
+          "completed": 17,
+          "failures": 0,
+          "totalMs": 26.000000089406967,
+          "peakMs": 5.9000000059604645,
+          "entriesWritten": 69,
+          "note": "Timings cover completed writes before this snapshot; they are excluded from GPU operation timings."
+        },
+        "diagnosticCharacters": 34194
+      },
+      "prepared-tokenizer-ui": {
+        "persistence": {
+          "mode": "compact",
+          "completed": 31,
+          "failures": 0,
+          "totalMs": 32.90000006556511,
+          "peakMs": 2.300000011920929,
+          "entriesWritten": 125,
+          "note": "Timings cover completed writes before this snapshot; they are excluded from GPU operation timings."
+        },
+        "diagnosticCharacters": 51176
+      }
+    },
+    "environment": "Headless Chromium 145 / SwiftShader; functionality checks, not iPhone performance."
+  },
+  "memory": {
+    "method": "Node-only BPE comparison; same preparation loader, fresh process per run. Not iPhone RSS. Three fresh processes per format; retained values subtract the pre-load baseline after GC.",
+    "node": "v22.22.1",
+    "modes": {
+      "patched": {
+        "samples": 3,
+        "maxRSSMiB": [
+          302.63671875,
+          298.171875,
+          302.21875
+        ],
+        "medianMaxRSSMiB": 302.21875,
+        "retainedHeapAndArrayBufferDeltaMiB": [
+          42.927191734313965,
+          42.92653560638428,
+          42.926764488220215
+        ],
+        "medianRetainedDeltaMiB": 42.926764488220215,
+        "durationMs": [
+          1106.855768,
+          961.7880819999999,
+          896.700911
+        ]
+      },
+      "prepared": {
+        "samples": 3,
+        "maxRSSMiB": [
+          151.5234375,
+          153.8984375,
+          153.23828125
+        ],
+        "medianMaxRSSMiB": 153.23828125,
+        "retainedHeapAndArrayBufferDeltaMiB": [
+          43.02831172943115,
+          43.02694606781006,
+          43.02335262298584
+        ],
+        "medianRetainedDeltaMiB": 43.02694606781006,
+        "durationMs": [
+          182.53051399999998,
+          215.530224,
+          232.84379399999997
+        ]
+      }
+    },
+    "medianMaxRSSReductionPercent": 49.295574397683794
+  },
+  "preparedAssets": {
+    "web/vendor/tokenizer/tokenizer-prepared.json": {
+      "bytes": 796757,
+      "sha256": "d818a872b5550a7b740de8b730e5724c26e4f99b529e5d17149dda950f28ccfa"
+    },
+    "web/vendor/tokenizer/tokenizer-ranks.bin": {
+      "bytes": 12582912,
+      "sha256": "9b308937cb673960ed16c61ac2a68a20b701f9b9ad0dda7829272a130030878c"
+    },
+    "web/vendor/tokenizer/tokenizer-vocab.bin": {
+      "bytes": 3364936,
+      "sha256": "62ccf3f5ac858a820d1ac5a9cf578edf4be9e47d670e9dcc1a10d4eb45a0abf3"
+    }
+  },
+  "phoneValidation": {
+    "status": "not-run",
+    "defaultTokenizerFormat": "json",
+    "required": [
+      "Same phone/release: alternate json/prepared full loads, three per condition at 8 MiB.",
+      "2c session retention for 120 seconds; five cached loads; short/long inference.",
+      "Two complete 100-row evaluations in one session, with TTFT, throughput and ROUGE.",
+      "Correlate unexplained interruptions with same-time device/Jetsam logs."
+    ]
+  }
+}

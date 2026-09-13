@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary } from '../web/sllm/diagnostics.js';
 
+test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
+  const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
+  assert.equal(recoveryEvidence(session).classification, 'completed-run-reentry');
+  const pending = { ...session, cleanup: { stage: 'cleanup-start', startedAt: 21 } };
+  const recovery = recoveryEvidence(pending, { phase: 'cleanup' });
+  assert.equal(recovery.classification, 'cleanup-reentry');
+  assert.equal(diagnosticSummary({ ...pending, recovery }).effectiveStatus, 'interrupted');
+  assert.equal(recoveryEvidence({ ...session, cleanup: { success: true } }, { phase: 'cleanup' }).classification, 'completed-run-reentry');
+  const observing = { ...session, status: 'running', summary: null, milestones: { 'session-create-complete': {} } };
+  assert.equal(recoveryEvidence(observing).interruptedPhase, 'after-session-create');
+  assert.equal(recoveryEvidence(observing).cause, 'unknown');
+});
+
 const snapshotRun = (id, environment, persist) => new RunDiagnostics(id, { ...environment, diagnosticsMode: 'snapshot' }, persist);
 
 function journalStore() {

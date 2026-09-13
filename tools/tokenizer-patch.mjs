@@ -37,7 +37,7 @@ export function patchTokenizerSource(kind, source, version, { compact = true } =
     }`);
   // Retain v1 solely as the previous-release baseline for the memory comparison.
   if (!compact) return incremental;
-  return incremental.replace('var BPE = class extends TokenizerModel_default {', `// Fixed-size open addressing avoids boxed Number keys and Map growth peaks.
+  const patched = incremental.replace('var BPE = class extends TokenizerModel_default {', `// Fixed-size open addressing avoids boxed Number keys and Map growth peaks.
 var CompactBpeRanks = class {
   constructor(count, stride) {
     let capacity = 1;
@@ -97,6 +97,35 @@ var BPE = class extends TokenizerModel_default {`).replace(`    this.bpe_ranks =
     return rank ?? (this.fallback_ranks.size ? this.fallback_ranks.get(JSON.stringify([left, right])) : undefined);
   }
   add_node(queue, node) {`);
+  const start = patched.indexOf('    this.tokens_to_ids = object_to_map(config.vocab);', patched.indexOf('var BPE = class'));
+  const end = patched.indexOf('    this.end_of_word_suffix = config.end_of_word_suffix;', start);
+  if (start < 0 || end < 0) throw new Error('Prepared BPE constructor patch mismatch');
+  return patched.slice(0, start) + `    const prepared = config._didimdolPreparedBpe;
+    if (prepared) {
+      this.rankKeyFormat = 'token-id-pair-v2';
+      this.preparedFormat = 'didimdol-bpe-v1';
+      this.vocab = prepared.vocab;
+      this.tokens_to_ids = new Map();
+      for (let id = 0; id < this.vocab.length; id++) this.tokens_to_ids.set(this.vocab[id], id);
+      for (const token of prepared.addedTokens) {
+        if ((token.id < prepared.stride && this.vocab[token.id] !== token.content) ||
+            (this.tokens_to_ids.has(token.content) && this.tokens_to_ids.get(token.content) !== token.id)) {
+          throw new Error('Added token changes a base BPE vocabulary ID');
+        }
+      }
+      this.unk_token = config.unk_token;
+      this.unk_token_id = this.tokens_to_ids.get(config.unk_token);
+      this.rankStride = prepared.stride;
+      this.mergeCount = prepared.mergeCount;
+      this.merges = null;
+      this.fallback_ranks = new Map();
+      this.bpe_ranks = Object.assign(Object.create(CompactBpeRanks.prototype), {
+        keys: prepared.keys, ranks: prepared.ranks, stride: prepared.stride,
+        mask: prepared.keys.length - 1, size: prepared.numericRankCount,
+      });
+    } else {
+` + patched.slice(start, end) + `    }
+` + patched.slice(end);
 }
 
 /** Checked transforms are applied in memory; node_modules is never modified. */
@@ -111,7 +140,7 @@ export async function tokenizerPatch(root) {
     files.set(file, patchTokenizerSource(kind, await readFile(file, 'utf8'), version));
   }
   return {
-    metadata: { implementation: TOKENIZER_IMPLEMENTATION, version: sources.tokenizers.version,
+    metadata: { implementation: TOKENIZER_IMPLEMENTATION, preparedFormat: 'didimdol-bpe-v1', version: sources.tokenizers.version,
       transformersVersion: sources.transformers.version,
       sourceSha256: sources.tokenizers.sha256, autoTokenizerSourceSha256: sources.transformers.sha256,
       retentionSourceSha256: retentionSource.sha256,

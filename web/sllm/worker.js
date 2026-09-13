@@ -10,6 +10,7 @@ import { OpfsWeightStore } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
 import { disposeResources } from './cleanup.js';
+import { observeSession } from './session-observation.js';
 import { opfsResidentProbe, runtimeProbe } from './experiments/probes.js';
 
 import { makeRouge1 } from './rouge.js';
@@ -103,6 +104,7 @@ class TimingStreamer extends BaseStreamer {
 
 let tokenizer = null, model = null, rouge1 = null;
 let tokenizerResult = null;
+let tokenizerFormat = 'json';
 let chatTemplate = null, rows = null;
 let device = 'wasm', aborted = false;
 const stopper = new InterruptableStoppingCriteria();
@@ -132,14 +134,26 @@ async function loadTokenizer(loadOrder = LOAD_ORDER) {
   if (typeof AutoTokenizer.from_json !== 'function' || runtimeBuild.tokenizer?.implementation !== 'compact-bpe-v2') {
     throw new Error('토크나이저 런타임을 새로 빌드해야 합니다. npm run build를 실행해 주세요.');
   }
+  let preparedBytes = 0;
+  const preparedTotal = ['tokenizer/tokenizer_config.json', 'web/vendor/tokenizer/tokenizer-prepared.json',
+    'web/vendor/tokenizer/tokenizer-vocab.bin', 'web/vendor/tokenizer/tokenizer-ranks.bin']
+    .reduce((sum, file) => sum + (runtimeBuild.assets?.[file]?.bytes || 0), 0);
   const result = await prepareTokenizer({
     createTokenizer: (data, config) => AutoTokenizer.from_json(data, config),
     baseURL: import.meta.url, build: runtimeBuild, checkpoint: journal.checkpoint, signal: loadController.signal, loadOrder,
+    format: tokenizerFormat,
     emit: record => {
       post({ type: 'preparation', record });
       const phase = record.stage.includes('create') ? '토크나이저 구성 중…'
         : record.stage.includes('parse') ? '토크나이저 데이터 해석 중…' : '토크나이저 준비 중…';
       post({ type: 'phase', text: phase });
+      if (tokenizerFormat === 'prepared') {
+        if (record.stage === 'tokenizer-read-complete') preparedBytes += record.bytes;
+        if (record.stage === 'tokenizer-load' || record.stage === 'tokenizer-read-complete') {
+          post({ type: 'dl', which: 'tok', status: 'progress', loaded: preparedBytes, total: preparedTotal });
+        }
+        if (record.stage === 'tokenizer-ready') post({ type: 'dl', which: 'tok', status: 'done' });
+      }
       if (record.file === 'tokenizer.json' && record.stage === 'tokenizer-read-start') {
         post({ type: 'dl', which: 'tok', status: 'progress', loaded: 0, total: record.expectedBytes });
       }
@@ -168,7 +182,7 @@ async function loadEvaluationInputs() {
   if (tokenizer) rouge1 = makeRouge1(tokenizer);
 }
 
-async function load({ device: preferred, stagingMiB = 8 }, sessionOnly = false) {
+async function load({ device: preferred, stagingMiB = 8, environment = {} }, sessionOnly = false) {
   const loadStarted = performance.now(), timings = {};
   if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
   env.useBrowserCache = true;   // 작은 모델 설정만 라이브러리 캐시 사용. 토크나이저는 릴리스 URL, 가중치는 OPFS.
@@ -188,7 +202,14 @@ async function load({ device: preferred, stagingMiB = 8 }, sessionOnly = false) 
   await trackedGpu.flush();
   if (trackedGpu.ledger.lastError) throw new Error(`WebGPU: ${trackedGpu.ledger.lastError}`);
   if (sessionOnly) {
-    const result = { ...sessionMetrics, success: true, modelSessionCreated: true, tokenizerPrepared: false };
+    const idleSeconds = environment.idleSeconds ?? 0;
+    if (idleSeconds) post({ type: 'phase', text: '세션 생성 완료 · 세션을 유지하며 관찰 중…' });
+    const observation = await observeSession({ seconds: idleSeconds, signal: loadController.signal,
+      checkpoint: journal.checkpoint, sample: () => {
+        if (!model || trackedGpu.ledger.deviceLost || trackedGpu.ledger.lastError) throw new Error('Session observation lost its GPU session');
+        return { modelSessionCreated: true, gpuLedger: { ...trackedGpu.ledger } };
+      } });
+    const result = { ...sessionMetrics, ...observation, success: true, modelSessionCreated: true, tokenizerPrepared: false };
     await journal.finish('complete', result);
     post({ type: 'result', result });
     return;
@@ -346,6 +367,7 @@ async function loadRuntimeResident(data) {
 let cleanupPromise;
 async function cleanupWorker() {
   return cleanupPromise ||= (async () => {
+    if (journal) await saveCheckpoint({ stage: 'cleanup-start', startedAt: Date.now() }, `cleanup:${journal.state.runId}`);
     const session = model;
     model = null; tokenizer = null; tokenizerResult = null; chatTemplate = null; rows = null; rouge1 = null;
     const cleanup = await disposeResources({ store: weightStore, loader: globalThis.__ortExternalTensorLoader,
@@ -527,8 +549,9 @@ self.onmessage = async ({ data }) => {
   const resident = ['resident-opfs', 'resident-opfs-tokenizer'].includes(operation);
   const loadOrder = { tokenizer: 'tokenizer-only', 'session-only': 'session-only',
     'resident-opfs': 'residency-only', 'resident-opfs-tokenizer': 'tokenizer-before-residency', 'runtime-resident': 'runtime-before-residency' }[operation] || LOAD_ORDER;
+  if (preparationOperations.has(operation)) tokenizerFormat = data.environment?.tokenizerFormat || new URL(self.location.href).searchParams.get('tokenizerFormat') || 'json';
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
-    runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder,
+    runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder, tokenizerFormat,
     stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
     diagnosticsMode: data.environment?.diagnosticsMode || new URL(self.location.href).searchParams.get('diagnosticsMode') || 'compact',
     workerURL: self.location.href });

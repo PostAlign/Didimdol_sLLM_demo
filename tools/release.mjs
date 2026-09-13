@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateRelease, releaseDescriptor } from '../web/sllm/release-manifest.js';
+import { prepareTokenizerAssets } from './prepare-tokenizer.mjs';
 
 export const sha = value => createHash('sha256').update(value).digest('hex');
 export const releaseId = manifest => sha(JSON.stringify(releaseDescriptor(manifest)));
@@ -27,6 +28,7 @@ export async function packageRelease(root, runtimeBuild) {
   for (const mode of previous.modes) vendorNames.push(`ort.${mode}.mjs`,
     `ort-wasm-simd-threaded.${mode}.mjs`, `ort-wasm-simd-threaded.${mode}.wasm`);
   names.push(...vendorNames.map(name => `web/vendor/${name}`));
+  if (previous.tokenizer?.preparedFormat === 'didimdol-bpe-v1') names.push(...await prepareTokenizerAssets(root));
   const assets = {};
   for (const name of [...new Set(names)].sort()) {
     // Deleted tracked files must not reappear in a local snapshot.
