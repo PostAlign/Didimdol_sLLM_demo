@@ -261,9 +261,14 @@ export function initSllm(root) {
   const modelExecutionSource = runtimeOptions.get('modelExecution') ? 'url' : isIOS ? 'default-ios' : 'default';
   workerURL.searchParams.set('modelExecution', modelExecution);
   workerURL.searchParams.set('trace', runtimeOptions.get('trace') || '0');
-  const environment = { userAgent: navigator.userAgent, isIOS, isStandalone, modelExecutionSource };
+  // `rowLimit=N` evaluates the first N rows only: a throughput check, never an
+  // acceptance run. The worker records the limit in the run summary.
+  const rowLimit = Math.max(0, Math.floor(Number(runtimeOptions.get('rowLimit')))) || null;
+  const environment = { userAgent: navigator.userAgent, isIOS, isStandalone, modelExecutionSource, rowLimit };
   const worker = new Worker(workerURL, { type: 'module' });
   let loaded = false, chosen = null, nRows = 100, stoppingLoad = false;
+  const runMessage = device => ({ type: 'run', runId: markAttempt(device, 'run'), environment, rowLimit });
+  const plannedRows = total => rowLimit && rowLimit < total ? rowLimit : total;
 
   // 모듈 import 실패 등 워커 스크립트 자체의 오류는 onmessage 로 오지 않는다.
   worker.onerror = async (e) => {
@@ -316,11 +321,11 @@ export function initSllm(root) {
         clearAttempt();
         badge(`${m.device === 'webgpu' ? '⚡ WebGPU' : '🐢 WASM(CPU)'} · fp32 로 실행 중`,
               m.device === 'webgpu' ? 'gpu' : 'cpu');
-        loaded = true; nRows = m.rows;
+        loaded = true; nRows = plannedRows(m.rows);
         els.prep.hidden = true;
         els.runbar.hidden = false;
         setBar(bars.run, 0, `0 / ${nRows}`);
-        worker.postMessage({ type: 'run', runId: markAttempt(m.device, 'run'), environment });
+        worker.postMessage(runMessage(m.device));
         break;
       case 'row':
         addRow(m.i, m.r, m.error, m.attempts);
@@ -360,8 +365,9 @@ export function initSllm(root) {
     $('#aR').textContent   = f3(m.r);
     $('#aEos').innerHTML   = `${m.eos}<span class="u">/ ${m.n}</span>`;
     $('#aWall').innerHTML  = `${(m.wall / 60000).toFixed(1)}<span class="u">분</span>`;
-    els.avg.hidden = false;                       // 100/100 완료 시에만 노출
+    els.avg.hidden = false;                       // 계획한 행을 모두 마쳤을 때만 노출
     const notes = [];
+    if (m.rowLimit) notes.push(`부분 평가 ${m.rowLimit}/${m.totalRows}행 · 수용 기준 아님`);
     if (m.retried) notes.push(`재시도 ${m.retried}행`);
     if (m.failed) notes.push(`실패 ${m.failed}행 포함, 평균은 전체 기준`);
     els.phase.textContent = `완료 · ${m.n}/${m.total}행` + (notes.length ? ` (${notes.join(' · ')})` : '');
@@ -376,7 +382,7 @@ export function initSllm(root) {
     if (loaded) {
       els.runbar.hidden = false;
       setBar(bars.run, 0, `0 / ${nRows}`);
-      worker.postMessage({ type: 'run', runId: markAttempt('webgpu', 'run'), environment });
+      worker.postMessage(runMessage('webgpu'));
     } else {
       els.prep.hidden = false;
       const p = resolvePlan(chosen);

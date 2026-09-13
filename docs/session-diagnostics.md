@@ -322,6 +322,110 @@ page opened without parameters, streamed cached load ×5 with a 30 s delay, and
 the `.ips` files of any interruption dropped into the experiment page before
 export.
 
+## September 13 night exports (release `217b6bd51b75`, commit `82adfc7`)
+
+Same iPhone (iPhone15,3, 5.5 GB), Chrome 153, Asyncify, nine OPFS cache hits in
+every run, no persisted GPU fault, no device loss, `compact` diagnostics on both
+pages, 0 s repeat delay. The evaluation page was opened without parameters and
+therefore streamed (`modelExecutionSource: default-ios`); it was exported once
+(`didimdol-diagnostics (11)`), the experiment page ten times
+(`iphone-fp32-experiments (55)`–`(64)`, each a prefix of the next; `(58)` is a
+re-export of `(57)` after the phone had slept). Three device files were
+collected: `JetsamEvent-2026-09-13-225106.ips`, a Networking disk-write report
+(`…diskwrites_resource-2026-09-13-231303.ips`) and nothing from the minutes of
+the three interruptions.
+
+| KST | Screen / experiment | Outcome |
+|---|---|---|
+| 22:54:44 | Evaluation page session create, streamed 2 MiB | 235/235, 383 MiB weights, 423 MiB requested, `ready` in 10.8 s |
+| 22:54:55–23:01:28 | Evaluation page 100-row evaluation, streamed | **rows 1–5 complete in 389 s**, one auxiliary `top_k` session, peak 496 MiB; stopped by the tester in row 6 (`AbortError` at output-upload chunk 14, status `cancelled`) |
+| 23:02:20–23:06:43 | 1, 1b, 1c, 1d, small runtime 120 s, tokenizer, 2c resident, 2c streamed | all complete; 2c resident 251/251 in 10.4 s (second consecutive session) |
+| 23:11:41 / 23:12:13 | 3 full load, streamed / resident | both `ready` (6.7 s / 9.6 s) |
+| 23:12:55 | 4 cached load 1/5, resident | `ready` in 8.9 s |
+| 23:13:04 | 4 cached load 2/5, resident | interrupted at `gpu-wait`, 123/251 (`embed_tokens.chunk12`), **607 MiB** allocated, page back after 0.7 s |
+| 23:13:38 / 23:13:45 | 4 cached load 1–2/5, streamed | both `ready` (7.2 s, 10.8 s; `modelLoadCall` 6.5 s against 10.0 s) |
+| 23:13:56 | 4 cached load 3/5, streamed | **interrupted at `ort-plan-start` with no weights**, 4.4 s in, 0.1–0.3 s after the previous runs, page back after 1.6 s |
+| 23:14:30 | 5 short inference, streamed | complete in 46.7 s, 32 tokens × 2 (20.5 s, 18.0 s), peak 498 MiB |
+| 23:15:38 | 5 short inference, resident | load `ready` in 9.9 s, interrupted 1.0 s into the first prompt, 0.5 s after the first token, 1,037 MiB requested, page back after 1.2 s |
+
+All three interruptions recorded `no-unload-event` and `navigationType:
+back_forward`. Row 5 of the evaluation (50-token prompt, 137 generated tokens)
+took 91.6 s: about 665 ms per token, of which the 671 MB output-projection
+upload took about 230 ms and its 16 head projections about 230 ms. The five rows
+read 420 GB from OPFS in 201,759 range reads of 2 MiB. At that rate one 100-row
+pass takes more than two hours.
+
+What repeated from earlier sessions:
+
+- Resident short inference ended within a second of its first token at 1,037
+  MiB requested for the third session in a row (07:35, 17:40, 23:15); the 17:40
+  instance is the one Jetsam confirmed as a `highwater` kill at 2,284 MiB.
+- The third rapid streamed cached load ended at `ort-plan-start` with no GPU
+  weights, as at 16:34 (evening session, 3/5). Both ran with a 0 s repeat delay;
+  the 30 s comparison was still not run.
+
+What changed: the resident cached load stopped earlier than any previous
+interruption (607 MiB against 740–1,060 MiB before), 2c resident completed a
+second time, and the evaluation page ran five streamed rows without a restart,
+the first inference session on this phone to pass its first token.
+
+What the device files say:
+
+- The Jetsam report is stamped 22:51:06, three and a half minutes before the
+  browser's Networking process started (22:54:06 by the disk-write report) and
+  before any run. It lists no browser coalition at all; Toss was in front with a
+  587 MiB WebContent process, and the only kill was `CloudTelemetryService`
+  (`per-process-limit`, 6.8 MiB). It documents the system state before the test
+  (free 156 MiB, compressor 1,049 MiB, about 1.1 GB of suspended third-party
+  apps), not any of the three interruptions, and the experiment page's matcher
+  correctly attached it to no row. No JetsamEvent or WebContent crash file for
+  23:13:15, 23:14:03 or 23:15:52 has been collected yet.
+- The Networking process wrote 1,073.75 MB of file-backed memory through
+  WebCore's SQLite storage between 22:54:06 and 23:13:01 (19 minutes, no action
+  taken). In that window the pages committed about 6,400 compact journal entries
+  on the evaluation page and about 40,000 in experiment runs, four durable
+  transactions per staging piece at roughly 5.8 KB each. Compact mode had cut
+  the earlier 4.29 GB per 90 minutes but not far enough.
+
+Changes in this commit:
+
+- **Streamed output upload.** `StreamedWeights` queues every scratch-sized
+  write of a chunk and waits once per chunk instead of after every piece; the
+  scratch follows the staging size (default 8 MiB, previously fixed at 2 MiB),
+  which also applies to the streamed body load. Per generated token this is 80
+  reads and 16 queue waits instead of 320 and 320. Metrics split `outputReadMs`
+  and `queueWaitMs` out of `uploadMs` and count `readCalls`, `writeCalls` and
+  `queueWaits`. Up to one chunk (40 MiB) of `writeBuffer` data may be in flight
+  before the wait; the phone measurement decides whether that stays.
+- **Durable evaluation rows.** `row-complete` records now carry the row's
+  timing and ROUGE, and the journal keeps them under `rows` outside the
+  64-event ring, so a cancelled or interrupted evaluation exports every finished
+  row. The evaluation page accepts `rowLimit=N` for throughput checks; the
+  `evaluation-rows` milestone and the summary record the limit, the result
+  says `부분 평가 · 수용 기준 아님`, and a partial run is never acceptance.
+- **Journal traffic.** `range-complete` is emitted in memory only (the next
+  pre-call record implies it), and the three pre-call range records drop the
+  ledger's `recentAllocations` list (`recentAllocationsOmitted` counts it). One
+  durable `streamed-step-complete` per eight tokens during evaluations; probes
+  keep every step. `persistence.serializedBytes` records the JSON length of
+  committed compact entries for comparison with the phone's disk-write report.
+- **Device reports.** JetsamEvent parsing adds `suspendedMiB`, `suspendedTop`,
+  `frontmost` and `compressorMiB`; `reportCoverage` classifies a report as
+  `before-runs`, `within-runs` or `after-runs` against the results on the page;
+  every dropped file is kept under `deviceReports` in the export with its
+  coverage, kills, matched rows and pressure figures, and the status line says
+  when a report holds no browser process.
+- **Repeats.** `diagnosticSummary.ortPlan` (time from `ort-session-start` to
+  `ort-plan-start`, WASM heap at that point) is a column on the experiment page
+  for comparing cached-load repeats. On iOS the page defaults to streamed
+  execution and a 30 s repeat delay; stored choices are kept, so a phone that
+  already saved 0 s has to select 30 s once.
+
+Still owed from the phone: the `.ips` files for the three interruptions above,
+streamed cached load ×5 with the 30 s delay, a streamed short probe and a
+`rowLimit=10` evaluation on this commit to measure the upload change, and then
+the two 100-row streamed evaluations.
+
 ## Experiment 1d: small ORT session plus stored-weight residency
 
 `runtime-resident` runs through the application worker, under the same origin

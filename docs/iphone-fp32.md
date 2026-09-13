@@ -328,12 +328,24 @@ loads, two 100-row evaluations without restart/device loss, stable resource usag
 repeats, and FP32 output/ROUGE/latency comparison with the reference. Record system jetsam
 logs where available to distinguish WebContent/GPU/compilation memory from other failures:
 the page's file input reads `JetsamEvent-*.ips` and WebContent crash files and attaches the
-kill reason, footprint and free memory to the interrupted rows before export.
+kill reason, footprint and free memory to the interrupted rows before export. Files that
+match no row are still kept in the export (`deviceReports`) with whether they fall inside
+the span of the runs.
 
-The evaluation page streams weights by default on iOS (`modelExecution=streamed` unless the
-URL says otherwise). The September 13 Jetsam reports ended resident FP32 with `highwater`
-kills at 1.75–2.3 GB of WebContent footprint, while the streamed path completed every load
-and probe with a 498 MiB peak request. See docs/session-diagnostics.md.
+On iOS the acceptance path is the streamed one. Resident inference is diagnostic only: in
+three September 13 sessions every resident inference ended within a second of its first
+token at about 1,037 MiB requested, and the one with a same-minute Jetsam report was a
+`highwater` kill at 2,284 MiB of WebContent footprint. The evaluation page streams by
+default on iOS (`modelExecution=streamed` unless the URL says otherwise) and the experiment
+page defaults to streamed execution with a 30 s repeat delay. Streamed loads and probes have
+completed in every session with a 498 MiB peak request; the streamed cached-load repeat
+still needs the 30 s-delay comparison because two sessions ended a third rapid repeat at
+`ort-plan-start`.
+
+Streamed throughput on the September 13 phone was about 1.5 tokens/s at 2 MiB staging
+(about 78 s per evaluation row, more than two hours per 100-row pass). The evaluation page
+accepts `rowLimit=N` to time a prefix of the rows; such a run is labelled a partial
+evaluation and is not acceptance. See docs/session-diagnostics.md.
 
 If the residency-only test fails, source/scratch improvements cannot guarantee success.
 Splitting into simultaneously resident sessions does not reduce the 1,023 MiB weight total.

@@ -58,9 +58,17 @@ export function parseDeviceReport(text, fileName = '', { timezoneOffsetMinutes =
     const pageSize = body.memoryStatus?.pageSize || PAGE_BYTES;
     const processes = Array.isArray(body.processes) ? body.processes.map(process => processEntry(process, pageSize)) : [];
     const pages = body.memoryStatus?.memoryPages || {};
+    // System pressure outside the page: what was suspended in the background
+    // and what was in front. The 22:51 report of September 13 held no browser
+    // process at all, and these fields are what made that readable.
+    const suspended = processes.filter(process => process.states?.includes('suspended') && process.rpages > 0)
+      .sort((a, b) => b.rpages - a.rpages);
     return { ...base, kind: 'jetsam', reportedAt: parseReportDate(body.date) ?? base.reportedAt, reportedAtText: body.date ?? base.reportedAtText,
       largestProcess: body.largestProcess ?? null, pageSize,
       freeMiB: mib(pages.free, pageSize), compressorMiB: mib(body.memoryStatus?.compressorSize, pageSize),
+      suspendedMiB: mib(suspended.reduce((sum, process) => sum + process.rpages, 0), pageSize),
+      suspendedTop: suspended.slice(0, 5).map(process => ({ name: process.name, footprintMiB: process.footprintMiB })),
+      frontmost: processes.filter(process => process.states?.includes('frontmost')).map(process => process.name),
       kills: processes.filter(process => process.reason),
       webContent: processes.filter(process => process.name === WEB_CONTENT) };
   }
@@ -99,6 +107,30 @@ export function deviceLogFromKill(report, kill, now = Date.now()) {
  * (the older process died first) and aligned with the latest candidate rows,
  * so a report that describes two kills claims the two most recent rows.
  */
+/**
+ * Whether a report's time falls inside the span of the results on the page
+ * (first start minus tolerance to last end plus tolerance). A report from
+ * before the first run describes the system before the test, not a kill in it.
+ */
+export function reportCoverage(results, report, { toleranceMs = 60000 } = {}) {
+  const starts = results.map(result => result.startedAt).filter(Number.isFinite);
+  const ends = results.map(result => result.endedAt ?? result.lastRecordAt ?? result.startedAt).filter(Number.isFinite);
+  if (!starts.length || !Number.isFinite(report.reportedAt)) return { coverage: 'unknown', offsetFromFirstRunMs: null, offsetFromLastRunMs: null };
+  const first = Math.min(...starts), last = Math.max(...ends);
+  const offsetFromFirstRunMs = report.reportedAt - first, offsetFromLastRunMs = report.reportedAt - last;
+  const coverage = report.reportedAt < first - toleranceMs ? 'before-runs' : report.reportedAt > last + toleranceMs ? 'after-runs' : 'within-runs';
+  return { coverage, offsetFromFirstRunMs, offsetFromLastRunMs };
+}
+
+/** Human-readable coverage for the status line and the results export. */
+export function coverageLabel(report) {
+  const minutes = ms => `${(Math.abs(ms) / 60000).toFixed(1)}분`;
+  if (report.coverage === 'before-runs') return `실행 구간 밖 · 첫 실행 ${minutes(report.offsetFromFirstRunMs)} 전`;
+  if (report.coverage === 'after-runs') return `실행 구간 밖 · 마지막 실행 ${minutes(report.offsetFromLastRunMs)} 뒤`;
+  if (report.coverage === 'within-runs') return '실행 구간 안';
+  return '실행 구간 판단 불가';
+}
+
 export function matchDeviceReports(results, reports, { toleranceMs = 60000, now = Date.now() } = {}) {
   const usable = reports.filter(report => ['jetsam', 'crash'].includes(report.kind) && Number.isFinite(report.reportedAt))
     .sort((a, b) => a.reportedAt - b.reportedAt);
@@ -108,7 +140,10 @@ export function matchDeviceReports(results, reports, { toleranceMs = 60000, now 
   let previousAt = -Infinity;
   for (const report of usable) {
     const kills = report.kills.filter(kill => kill.name === WEB_CONTENT).sort((a, b) => (a.pid ?? 0) - (b.pid ?? 0));
-    if (!kills.length) { context.push({ file: report.file, kind: report.kind, reportedAt: report.reportedAt, freeMiB: report.freeMiB ?? null,
+    if (!kills.length) { context.push({ file: report.file, kind: report.kind, reportedAt: report.reportedAt, reportedAtText: report.reportedAtText ?? null,
+      ...reportCoverage(results, report, { toleranceMs }),
+      freeMiB: report.freeMiB ?? null, compressorMiB: report.compressorMiB ?? null, suspendedMiB: report.suspendedMiB ?? null,
+      suspendedTop: report.suspendedTop ?? [], frontmost: report.frontmost ?? [],
       largestProcess: report.largestProcess ?? null, kills: report.kills.map(kill => `${kill.name} ${kill.reason}`),
       webContent: report.webContent.map(process => ({ pid: process.pid, footprintMiB: process.footprintMiB, lifetimeMaxMiB: process.lifetimeMaxMiB })) }); }
     const candidates = rows.filter(row => !taken.has(row.index) && row.endedAt > previousAt - toleranceMs && row.endedAt <= report.reportedAt + toleranceMs);
@@ -118,7 +153,7 @@ export function matchDeviceReports(results, reports, { toleranceMs = 60000, now 
       const row = position - offset >= 0 ? chosen[position - offset] : null;
       if (!row) { unmatched.push({ file: report.file, pid: kill.pid, reason: kill.reason, footprintMiB: kill.footprintMiB }); return; }
       taken.add(row.index);
-      matched.push({ index: row.index, runId: row.result.runId ?? null, deviceLog: deviceLogFromKill(report, kill, now) });
+      matched.push({ index: row.index, runId: row.result.runId ?? null, file: report.file, deviceLog: deviceLogFromKill(report, kill, now) });
     });
     previousAt = report.reportedAt;
   }

@@ -47,9 +47,19 @@ export class SessionRangeLoader {
   event(stage, details = {}) {
     this.emit({ stage, ...details, metrics: { ...this.metrics }, timestamp: Date.now() });
   }
+  // The three pre-call range records of every staging piece are the bulk of a
+  // load's IndexedDB traffic (about 2,300 transactions per full load on the
+  // September 13 phone). They keep the ledger totals and categories but drop the
+  // recent-allocation list, which `allocate-initializer` records already carry.
+  static SLIM_LEDGER_STAGES = new Set(['range-read', 'gpu-write', 'gpu-wait']);
   async record(stage, details = {}) {
     const storage = this.storage();
-    await this.checkpoint({ ...this.last, ...details, stage, metrics: this.sampleMetrics(), gpuLedger: this.gpuLedger(),
+    let gpuLedger = this.gpuLedger();
+    if (gpuLedger?.recentAllocations && SessionRangeLoader.SLIM_LEDGER_STAGES.has(stage)) {
+      const { recentAllocations, ...rest } = gpuLedger;
+      gpuLedger = { ...rest, recentAllocationsOmitted: recentAllocations.length };
+    }
+    await this.checkpoint({ ...this.last, ...details, stage, metrics: this.sampleMetrics(), gpuLedger,
       ...(storage ? { storage: { ...storage } } : {}) });
   }
   check() {
@@ -214,7 +224,10 @@ export class SessionRangeLoader {
           heap.set(data, target + position);
         }
         this.sampleMetrics();
-        await this.record('range-complete', range);
+        // Completion is implied by the next durable pre-call record (the next
+        // piece's `range-read` or this initializer's `initializer-complete`), so
+        // it is emitted in memory only. One transaction fewer per staging piece.
+        this.event('range-complete', { ...this.last, ...range });
       }
       operation = 'popErrorScope';
       while (scopes) await popScope();

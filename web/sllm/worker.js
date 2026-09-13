@@ -226,7 +226,7 @@ async function load({ device: preferred, stagingMiB = 8, environment = {} }, ses
 
 // Both the production load and the session-only diagnostic use this exact path.
 async function loadModelSession(stagingMiB, timings, loadOrder) {
-  if (modelExecution === 'streamed') return loadStreamedSession(timings, loadOrder);
+  if (modelExecution === 'streamed') return loadStreamedSession(timings, loadOrder, stagingMiB);
   // 모바일 빌드 자체가 단일 스레드이며 런타임 설정도 일치시킨다.
   try {
     env.backends.onnx.wasm.numThreads = 1;
@@ -330,7 +330,10 @@ async function loadModelSession(stagingMiB, timings, loadOrder) {
   env.useBrowserCache = true;
 }
 
-async function loadStreamedSession(timings, loadOrder) {
+// The staging size is one knob for both the body upload and the per-token
+// output-weight scratch. The September 13 phone streamed at 2 MiB, which cost
+// 320 OPFS reads and 320 queue waits per generated token.
+async function loadStreamedSession(timings, loadOrder, stagingMiB = 8) {
   const started = performance.now();
   const sourceURL = new URL('../../model/initializers.json', import.meta.url);
   const descriptorURL = new URL('../../model/streamed/manifest.json', import.meta.url);
@@ -353,7 +356,7 @@ async function loadStreamedSession(timings, loadOrder) {
   }, { context: () => gpuOperationContext(journal.state.last) });
   const options = { executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled', enableCpuMemArena: false, enableMemPattern: false };
   await journal.checkpoint({ stage: 'session-create', modelExecution, loadOrder, tokenizerPrepared: !!tokenizer,
-    stagingMiB: 2, timings: { ...timings }, storage: { ...weightStore.metrics } });
+    stagingMiB, timings: { ...timings }, storage: { ...weightStore.metrics } });
   const modelStarted = performance.now();
   // The head has dynamic weights and no external initializers. Create it once.
   // WASM initializes during this first session, so the bridge hands the heap
@@ -364,7 +367,7 @@ async function loadStreamedSession(timings, loadOrder) {
   globalThis.__ortExternalTensorLoader = headBridge;
   const head = await ort.InferenceSession.create(headGraph, options);
   pendingStreamedSessions.push(head);
-  const loader = new SessionRangeLoader({ manifest, stagingMiB: 2, signal: loadController.signal, getHeap: headBridge.getHeap,
+  const loader = new SessionRangeLoader({ manifest, stagingMiB, signal: loadController.signal, getHeap: headBridge.getHeap,
     gpuTracker: trackedGpu, storage: () => weightStore.metrics, checkpoint: record => journal.checkpoint(record) });
   globalThis.__ortExternalTensorLoader = loader;
   let success = false;
@@ -378,7 +381,8 @@ async function loadStreamedSession(timings, loadOrder) {
     const generationResponse = await fetch(LOCAL['generation_config.json']);
     if (!generationResponse.ok) throw new Error('Generation config missing');
     streamedSession = new StreamedSession({ ort, body, head, descriptor, store: weightStore, manifest: source,
-      tracker: trackedGpu, signal: loadController.signal, checkpoint: record => journal.checkpoint(record) });
+      tracker: trackedGpu, signal: loadController.signal, checkpoint: record => journal.checkpoint(record),
+      scratchBytes: Math.min(stagingMiB * 2**20, descriptor.chunkBytes) });
     model = new Gemma3ForCausalLM(config, { model: streamedSession }, { generation_config: await generationResponse.json() });
     pendingStreamedSessions = [];
     await trackedGpu.flush();
@@ -391,7 +395,7 @@ async function loadStreamedSession(timings, loadOrder) {
     weightStore.closeActive();
     sessionMetrics = { stage: success ? 'session-create-complete' : 'session-create-failed', modelExecution,
       loadOrder, tokenizer: tokenizerResult, tokenizerPrepared: !!tokenizer, modelSessionCreated: success,
-      runtimeMode, stagingMiB: 2, durationMs: performance.now() - started, metrics, timings: { ...timings },
+      runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics, timings: { ...timings },
       streaming: streamedSession ? { ...streamedSession.weights.metrics } : null,
       gpuLedger: { ...trackedGpu.ledger }, storage: { ...weightStore.metrics } };
     await journal.checkpoint(sessionMetrics);
@@ -566,8 +570,21 @@ async function runRow(row) {
 }
 
 // ── 전체 평가 ───────────────────────────────────────────────────────────────
-async function runAll() {
+// `rowLimit` runs a prefix of the 100 rows for throughput checks on the phone.
+// A partial run is recorded as such and never counts as evaluation acceptance.
+async function runAll(rowLimit = null) {
   if (aborted) { await journal.finish('cancelled', { completedRows: 0 }); post({ type: 'aborted', at: 0 }); return; }
+  const limited = Number.isInteger(rowLimit) && rowLimit > 0 && rowLimit < rows.length;
+  const evaluationRows = limited ? rows.slice(0, rowLimit) : rows;
+  const plan = { rows: evaluationRows.length, totalRows: rows.length, rowLimit: limited ? rowLimit : null };
+  await journal.checkpoint({ stage: 'evaluation-rows', ...plan });
+  // One durable step record per eight tokens: the inference samples already
+  // carry the streaming totals, and a 100-row evaluation is about 13,000 steps.
+  if (streamedSession) streamedSession.stepCheckpointEvery = 8;
+  try { await runRows(evaluationRows, plan); }
+  finally { if (streamedSession) streamedSession.stepCheckpointEvery = 1; }
+}
+async function runRows(rows, plan) {
   random.seed(SEED);   // 동일 시드 → 동일 결과. do_sample 이라 이게 없으면 매번 달라진다.
 
   // 워밍업: 첫 추론에는 ORT 커널 컴파일이 섞인다. 1행 TTFT 가 혼자 튀지 않게 버린다.
@@ -588,15 +605,16 @@ async function runAll() {
   const wall = performance.now();
   const done = [];
   for (let i = 0; i < rows.length; ++i) {
-    if (aborted) { await journal.finish('cancelled', { completedRows: i }); post({ type: 'aborted', at: i }); return; }
+    if (aborted) { await journal.finish('cancelled', { completedRows: i, ...plan }); post({ type: 'aborted', at: i }); return; }
     post({ type: 'phase', text: `평가 중… ${i + 1}/${rows.length}` });
     await recordMemory('row-start', { row: i + 1 });
     const t0 = performance.now();
     try {
       const r = await runRow({ ...rows[i], index: i + 1 });
-      if (aborted) { await journal.finish('cancelled', { completedRows: i }); post({ type: 'aborted', at: i }); return; }
+      if (aborted) { await journal.finish('cancelled', { completedRows: i, ...plan }); post({ type: 'aborted', at: i }); return; }
       done.push(r);
-      await recordMemory('row-complete', { row: i + 1, promptLen: r.promptLen, nTok: r.nTok });
+      await recordMemory('row-complete', { row: i + 1, promptLen: r.promptLen, nTok: r.nTok,
+        result: { ttft: r.ttft, totalMs: r.total, tps: r.tps, eos: r.eos, rouge: r.rouge } });
       post({ type: 'row', i, r, progress: (i + 1) / rows.length });
     } catch (e) {
       // 실패 위치를 표시하고 종료한다. 불완전한 실행의 평균은 표시하지 않는다.
@@ -614,20 +632,20 @@ async function runAll() {
       throw e;
     }
   }
-  if (aborted) { await journal.finish('cancelled', { completedRows: rows.length }); post({ type: 'aborted', at: rows.length }); return; }
+  if (aborted) { await journal.finish('cancelled', { completedRows: rows.length, ...plan }); post({ type: 'aborted', at: rows.length }); return; }
 
   // done.length === rows.length. 512 상한에 걸린 행도 포함한 전체 평균.
   const avg = (f) => done.reduce((s, r) => s + f(r), 0) / done.length;
   const result = {
     type: 'done',
-    n: done.length, total: rows.length,
+    n: done.length, total: rows.length, totalRows: plan.totalRows, rowLimit: plan.rowLimit,
     failed: done.filter(r => r.failed).length,
     ttft: avg(r => r.ttft), totalMs: avg(r => r.total), tps: avg(r => r.tps),
     p: avg(r => r.rouge.p), r: avg(r => r.rouge.r), f1: avg(r => r.rouge.f1),
     eos: done.filter(r => r.eos).length,
     wall: performance.now() - wall,
   };
-  await journal.finish('complete', { result, gpuLedger: { ...trackedGpu.ledger },
+  await journal.finish('complete', { result, gpuLedger: { ...trackedGpu.ledger }, ...plan,
     rows: done.map(({ pred, ref, ...metrics }) => metrics) });
   post(result);
 }
@@ -705,7 +723,7 @@ self.onmessage = async ({ data }) => {
   if (preparationOperations.has(operation)) modelExecution = data.environment?.modelExecution || new URL(self.location.href).searchParams.get('modelExecution') || 'resident';
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
     runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder, tokenizerFormat, modelExecution,
-    stagingMiB: operation === 'tokenizer' ? null : modelExecution === 'streamed' ? 2 : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+    stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
     diagnosticsMode: data.environment?.diagnosticsMode || new URL(self.location.href).searchParams.get('diagnosticsMode') || 'compact',
     workerURL: self.location.href });
   try {
@@ -740,7 +758,7 @@ self.onmessage = async ({ data }) => {
     } else {
       if (!model || !tokenizer || !rouge1) throw new Error('Model and tokenizer must both be prepared');
       if (data.type === 'probe') await runProbe(data.maxNewTokens, data.sampled === true);
-      else await runAll();
+      else await runAll(data.rowLimit);
     }
   } catch (err) {
     const cancelled = aborted || !!loadController?.signal.aborted;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDeviceReport, parseReportDate, parseFileDate, matchDeviceReports, deviceLogFromKill, WEB_CONTENT } from '../web/sllm/experiments/device-log.js';
+import { parseDeviceReport, parseReportDate, parseFileDate, matchDeviceReports, deviceLogFromKill, reportCoverage, coverageLabel, WEB_CONTENT } from '../web/sllm/experiments/device-log.js';
 import { parseDeviceLogNote } from '../web/sllm/experiments/results.js';
 
 // Trimmed from the September 13 phone reports: three processes, real page counts.
@@ -101,4 +101,56 @@ test('kill notes without a footprint keep the file and reason only', () => {
   const log = deviceLogFromKill({ file: 'WebContent.ips', reportedAt: 1 }, { pid: 3, reason: 'Memory limit exceeded', footprintMiB: null, lifetimeMaxMiB: null }, 2);
   assert.equal(log.note, 'WebContent.ips · Memory limit exceeded');
   assert.equal(log.footprintMiB, null);
+});
+
+// Trimmed from JetsamEvent-2026-09-13-225106.ips: Toss in front, no browser
+// process at all, a telemetry daemon killed for its own limit, 156 MiB free.
+const preRunReport = JSON.stringify({ bug_type: '298', timestamp: '2026-09-13 22:51:06.00 +0900' }) + '\n' +
+  JSON.stringify({ build: 'iPhone OS 26.6.2 (23G90)', product: 'iPhone15,3', date: '2026-09-13 22:51:06.93 +0900', bug_type: '298', largestProcess: WEB_CONTENT,
+    memoryStatus: { compressorSize: 67145, pageSize: 16384, memoryPages: { free: 9989, anonymous: 101007 } },
+    processes: [
+      { name: 'kernel_task', pid: 0, rpages: 15832, states: ['active'] },
+      { name: WEB_CONTENT, pid: 2766, rpages: 37587, lifetimeMax: 45017, states: ['active'], coalition: 1302 },
+      { name: 'Toss', pid: 2233, rpages: 11658, lifetimeMax: 14159, states: ['active', 'frontmost'], coalition: 1302 },
+      { name: 'Slack', pid: 1139, rpages: 16090, states: ['suspended'] },
+      { name: 'KakaoTalk', pid: 1627, rpages: 14371, states: ['suspended'] },
+      { name: 'Runner', pid: 1758, rpages: 12499, states: ['suspended'] },
+      { name: 'Korail', pid: 2515, rpages: 11164, states: ['suspended'] },
+      { name: 'Gmail', pid: 1654, rpages: 7733, states: ['suspended'] },
+      { name: 'Podcasts', pid: 677, rpages: 6027, states: ['suspended'] },
+      { name: 'CloudTelemetryService', pid: 2088, rpages: 432, lifetimeMax: 458, states: ['daemon', 'idle'], reason: 'per-process-limit' },
+    ] });
+
+test('a report from before the first run is context with system pressure, never a match', () => {
+  const report = parseDeviceReport(preRunReport, 'JetsamEvent-2026-09-13-225106.ips', { timezoneOffsetMinutes: KST });
+  assert.equal(report.kind, 'jetsam');
+  assert.deepEqual(report.kills.map(kill => [kill.name, kill.reason]), [['CloudTelemetryService', 'per-process-limit']]);
+  assert.equal(report.freeMiB, 156.1);
+  assert.equal(report.compressorMiB, 1049.1);
+  assert.equal(report.suspendedMiB, 1060.7, 'suspended third-party apps are summed');
+  assert.deepEqual(report.suspendedTop.map(process => process.name), ['Slack', 'KakaoTalk', 'Runner', 'Korail', 'Gmail']);
+  assert.deepEqual(report.frontmost, ['Toss']);
+  const results = [
+    { runId: 'load', kind: 'load', interrupted: false, startedAt: kst('2026-09-13 22:54:44.823'), endedAt: kst('2026-09-13 22:54:55.660') },
+    { runId: 'warm', kind: 'warm-load', interrupted: true, startedAt: kst('2026-09-13 23:13:04.170'), endedAt: kst('2026-09-13 23:13:15.209') },
+  ];
+  const coverage = reportCoverage(results, report);
+  assert.equal(coverage.coverage, 'before-runs');
+  assert.equal(Math.round(coverage.offsetFromFirstRunMs / 1000), -218);
+  assert.match(coverageLabel(coverage), /첫 실행 3\.6분 전/);
+  const { matched, unmatched, context } = matchDeviceReports(results, [report]);
+  assert.equal(matched.length, 0);
+  assert.equal(unmatched.length, 0);
+  assert.equal(context.length, 1);
+  assert.equal(context[0].coverage, 'before-runs');
+  assert.equal(context[0].suspendedMiB, 1060.7);
+  assert.deepEqual(context[0].frontmost, ['Toss']);
+  assert.equal(context[0].webContent[0].pid, 2766, 'another app\'s WebContent is still listed; the browser had not started');
+  const within = reportCoverage(results, { reportedAt: kst('2026-09-13 23:13:15') });
+  assert.equal(within.coverage, 'within-runs');
+  assert.equal(coverageLabel(within), '실행 구간 안');
+  assert.equal(reportCoverage(results, { reportedAt: kst('2026-09-13 23:40:00') }).coverage, 'after-runs');
+  assert.equal(reportCoverage([], report).coverage, 'unknown');
+  assert.equal(reportCoverage(results, { reportedAt: null }).coverage, 'unknown');
+  assert.equal(coverageLabel({ coverage: 'unknown' }), '실행 구간 판단 불가');
 });

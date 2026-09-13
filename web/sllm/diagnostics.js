@@ -74,7 +74,7 @@ async function readJournalEntries(runId) {
 export const newRunId = () => crypto.randomUUID();
 export const runKey = runId => `run:${runId}`;
 const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-verified', 'weights-prepared',
-  'resident-start',
+  'resident-start', 'evaluation-rows',
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
   'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'session-idle-start', 'session-idle-complete',
   'auxiliary-session-start', 'auxiliary-session-complete',
@@ -232,9 +232,27 @@ export function diagnosticSummary(run, sessionFallback = null) {
     cleanup: run.cleanup ?? null, persistence: run.persistence ?? null,
     ortPhases: Object.values(run.milestones || {}).filter(record => record.stage?.startsWith('ort-'))
       .map(({ stage, elapsedMs, sessionDiagnosticsVersion }) => ({ stage, elapsedMs, sessionDiagnosticsVersion })),
+    ortPlan: ortPlanEvidence(run.milestones),
+    rows: Array.isArray(run.rows) ? run.rows.length : null,
     timings: run.summary?.sessionMetrics?.timings ?? run.summary?.timings
       ?? session?.timings ?? run.milestones?.['session-create']?.timings ?? null,
     releaseId: run.environment?.build?.releaseId ?? null };
+}
+
+/**
+ * Where a run stood when ORT began planning the graph: the gap from
+ * `ort-session-start` and the WASM heap at that moment. Two September 13
+ * sessions ended a third rapid cached load at `ort-plan-start` with no weights,
+ * so repeats are compared on this point rather than on upload counters.
+ */
+export function ortPlanEvidence(milestones) {
+  const plan = milestones?.['ort-plan-start'];
+  if (!plan) return null;
+  const sessionStart = milestones['ort-session-start'];
+  const wasmComplete = milestones['ort-wasm-complete'];
+  const since = reference => Number.isFinite(plan.elapsedMs) && Number.isFinite(reference?.elapsedMs) ? plan.elapsedMs - reference.elapsedMs : null;
+  return { elapsedMs: plan.elapsedMs ?? null, sinceSessionStartMs: since(sessionStart), sinceWasmCompleteMs: since(wasmComplete),
+    wasmHeapBytes: plan.metrics?.wasmHeapBytes ?? null, gpuRequestedCurrent: plan.gpuLedger?.requestedCurrent ?? null };
 }
 
 export const trackingLabel = status => ({ complete: '정상', partial: '부분 관측', unbound: '연결 미확인', unknown: '미기록' }[status] || '미기록');
@@ -248,6 +266,7 @@ export async function recordRecovery(run, context = {}) {
 }
 
 const MAX_HISTORY_CHARACTERS = 16384;
+const MAX_ROWS = 128;
 function historyRecord(value) {
   // Bound both the number and size of recent records. The full latest record,
   // faults, milestones and terminal summary are persisted separately if large.
@@ -268,9 +287,10 @@ export class RunDiagnostics {
     this.dirty = new Map();
     this.state = { schemaVersion: 4, runId, startedAt: Date.now(), status: 'running', environment,
       records: [], last: null, fault: null, firstFault: null, summary: null,
-      milestones: {}, files: {}, preparation: {}, initializerOrder: [], droppedInitializers: 0, recordCount: 0,
-      persistence: { mode: this.mode, completed: 0, failures: 0, totalMs: 0, peakMs: 0, entriesWritten: 0,
-        note: 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings.' },
+      milestones: {}, files: {}, preparation: {}, initializerOrder: [], rows: [], droppedInitializers: 0, recordCount: 0,
+      persistence: { mode: this.mode, completed: 0, failures: 0, totalMs: 0, peakMs: 0, entriesWritten: 0, serializedBytes: 0,
+        note: 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings. '
+          + 'serializedBytes is the JSON length of committed compact entries, not the bytes IndexedDB wrote to disk.' },
       memoryNote: 'Allocation counters and WASM capacity are not process RSS or driver memory.' };
     this.pending = Promise.resolve();
   }
@@ -298,6 +318,12 @@ export class RunDiagnostics {
           gpuWeightAllocated: value.metrics?.gpuWeightAllocated ?? value.gpuWeightAllocated });
         else this.state.droppedInitializers++;
       }
+      // Row summaries outlive the 64-event ring: a cancelled or interrupted
+      // evaluation keeps every completed row's timing without prompt text.
+      if (value.stage === 'row-complete' && Number.isInteger(value.row) && this.state.rows.length < MAX_ROWS) {
+        this.state.rows.push({ row: value.row, promptLen: value.promptLen ?? null, nTok: value.nTok ?? null,
+          durationMs: value.inference?.durationMs ?? value.result?.totalMs ?? null, ...(value.result || {}), timestamp: value.timestamp });
+      }
       this.state.recordCount++;
       this.state.last = value;
       const history = historyRecord(value);
@@ -315,6 +341,8 @@ export class RunDiagnostics {
       if (initializer?.timestamp === value.timestamp && ['allocate-initializer', 'resident-allocate'].includes(value.stage)) {
         delta(`initializer:${initIndex}`, 'initializer', { index: initIndex, value: initializer });
       }
+      const row = this.state.rows.at(-1);
+      if (value.stage === 'row-complete' && row?.timestamp === value.timestamp) delta(`row:${row.row}`, 'row', { value: row });
       if (this.state.fault === value || this.state.firstFault === value) delta('faults', 'faults', { fault: this.state.fault, firstFault: this.state.firstFault });
       delta('head', 'head', { ...(history !== value ? { last: value } : {}), status: this.state.status, updatedAt: value.timestamp, recordCount: this.state.recordCount,
         droppedInitializers: this.state.droppedInitializers, persistence: { ...this.state.persistence } });
@@ -332,6 +360,7 @@ export class RunDiagnostics {
       if (saved !== false) {
         this.headerSaved = true;
         this.state.persistence.entriesWritten += this.mode === 'snapshot' ? 1 : entries.length;
+        if (this.mode !== 'snapshot') this.state.persistence.serializedBytes += JSON.stringify(entries).length;
         this.dirty.clear();
       }
       const ms = performance.now() - start;
@@ -366,7 +395,7 @@ export async function readRun(runId, options = {}) {
     const { storageFormat, ...header } = value;
     const { kind, ...state } = head;
     value = { ...header, ...state, records: [], last: null, summary: null, fault: null, firstFault: null,
-      milestones: {}, files: {}, preparation: {}, initializerOrder: [] };
+      milestones: {}, files: {}, preparation: {}, initializerOrder: [], rows: [] };
     const events = [];
     for (const entry of entries) {
       if (entry.kind === 'event' && entry.sequence <= head.recordCount && entry.sequence > head.recordCount - 64) events.push(entry);
@@ -377,10 +406,12 @@ export async function readRun(runId, options = {}) {
         value.preparation[entry.file][entry.name] = entry.value;
       }
       if (entry.kind === 'initializer') value.initializerOrder[entry.index] = entry.value;
+      if (entry.kind === 'row') value.rows.push(entry.value);
       if (entry.kind === 'summary') value.summary = entry.value;
       if (entry.kind === 'faults') { value.fault = entry.fault; value.firstFault = entry.firstFault; }
     }
     events.sort((a, b) => a.sequence - b.sequence);
+    value.rows.sort((a, b) => a.row - b.row);
     value.records = events.map(entry => entry.value);
     value.last = head.last ?? events.find(entry => entry.sequence === head.recordCount)?.value ?? null;
     value.initializerOrder = value.initializerOrder.filter(Boolean);

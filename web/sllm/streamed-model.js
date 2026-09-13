@@ -32,9 +32,14 @@ export async function verifiedStreamedGraph(descriptor, name, baseURL) {
 
 /** ORT session facade: preserves Transformers' generation/cache/sampling machinery. */
 export class StreamedSession {
-  constructor({ ort, body, head, descriptor, store, manifest, tracker, signal, checkpoint = async () => {} }) {
+  constructor({ ort, body, head, descriptor, store, manifest, tracker, signal, checkpoint = async () => {}, scratchBytes,
+    stepCheckpointEvery = 1 }) {
     Object.assign(this, { ort, body, head, descriptor, checkpoint });
-    this.weights = new StreamedWeights({ ort, device: tracker.device, tracker, store, manifest, descriptor, signal });
+    // Durable `streamed-step-complete` records are written every N projections.
+    // Inference samples already carry the streaming totals every few seconds, so
+    // a 100-row evaluation does not need one IndexedDB transaction per token.
+    this.stepCheckpointEvery = stepCheckpointEvery;
+    this.weights = new StreamedWeights({ ort, device: tracker.device, tracker, store, manifest, descriptor, signal, scratchBytes });
     this.inputNames = [...new Set(['input_ids', ...body.inputNames.filter(name => name !== 'streamed_embeddings')])];
     this.inputMetadata = this.inputNames.map(name => body.inputMetadata.find(value => value.name === name) ||
       { name, type: 'int64', shape: ['batch_size', 'sequence_length'], isTensor: true });
@@ -71,8 +76,11 @@ export class StreamedSession {
       }
       this.weights.check();
       this.weights.metrics.projections++;
-      await this.checkpoint({ stage: 'streamed-step-complete', durationMs: performance.now() - start,
-        streaming: { ...this.weights.metrics } });
+      const every = Math.max(1, Math.floor(this.stepCheckpointEvery) || 1);
+      if (this.weights.metrics.projections % every === 0) {
+        await this.checkpoint({ stage: 'streamed-step-complete', durationMs: performance.now() - start,
+          stepCheckpointEvery: every, streaming: { ...this.weights.metrics } });
+      }
       hidden.dispose(); delete outputs[this.descriptor.hiddenOutput];
       outputs.logits = new this.ort.Tensor('float32', logits, [1, 1, this.descriptor.vocabSize]);
       returned = true;

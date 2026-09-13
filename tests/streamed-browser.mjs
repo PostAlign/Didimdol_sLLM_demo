@@ -122,7 +122,8 @@ try {
     await page.locator('#modelExecution').selectOption('streamed');
     const idle = process.env.STREAMED_TEST_IDLE || '0';
     await page.locator('#sessionIdle').selectOption(idle);
-    assert.equal(await page.locator('#staging').isDisabled(), true);
+    assert.equal(await page.locator('#staging').isDisabled(), false, 'the staging size now applies to streamed loading');
+    await page.locator('#staging').selectOption('2');
     assert.match(await page.locator('#evaluationLink').getAttribute('href'), /modelExecution=streamed/);
     await page.locator('#start').click();
     const progress = setInterval(async () => console.log('UI:', await page.locator('#status').textContent()), 30000);

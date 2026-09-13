@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock, ortPlanEvidence } from '../web/sllm/diagnostics.js';
 
 test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
   const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
@@ -286,4 +286,44 @@ test('an ort-wasm-error checkpoint is the run fault and stays visible after the 
   assert.equal(summary.effectiveStatus, 'failed');
   assert.equal(summary.faultStage, 'ort-wasm-error');
   assert.deepEqual(summary.ortPhases.map(phase => phase.stage), ['ort-wasm-error']);
+});
+
+test('completed evaluation rows survive the event ring and a cancelled run keeps them', async () => {
+  const store = journalStore();
+  const run = new RunDiagnostics('rows', { modelExecution: 'streamed' }, undefined, { persistBatch: entries => store.persistBatch(entries) });
+  await run.checkpoint({ stage: 'evaluation-rows', rows: 3, totalRows: 100, rowLimit: 3 });
+  for (let row = 1; row <= 3; row++) {
+    await run.checkpoint({ stage: 'row-start', row });
+    for (let step = 0; step < 30; step++) await run.checkpoint({ stage: 'streamed-step-complete', durationMs: 665 });
+    await run.checkpoint({ stage: 'row-complete', row, promptLen: 50 + row, nTok: 137,
+      inference: { durationMs: 91638 }, result: { ttft: 2186, totalMs: 91638, tps: 1.5, eos: true, rouge: { p: 0.1, r: 0.2, f1: 0.13 } } });
+  }
+  await run.finish('cancelled', { completedRows: 3, rows: 3, totalRows: 100, rowLimit: 3 });
+  const recovered = await readRun('rows', store);
+  assert.equal(recovered.records.length, 64, 'the ring no longer holds the first rows');
+  assert.deepEqual(recovered.rows.map(row => [row.row, row.promptLen, row.nTok, row.durationMs, row.tps, row.rouge.f1]),
+    [[1, 51, 137, 91638, 1.5, 0.13], [2, 52, 137, 91638, 1.5, 0.13], [3, 53, 137, 91638, 1.5, 0.13]]);
+  assert.equal(recovered.milestones['evaluation-rows'].rowLimit, 3);
+  assert.equal(recovered.summary.rowLimit, 3);
+  assert.equal(recovered.persistence.serializedBytes > 0, true);
+  assert.equal(diagnosticSummary(recovered).rows, 3);
+  assert.equal(diagnosticSummary({ last: {} }).rows, null);
+  const snapshot = snapshotRun('rows-snapshot', {}, async () => true);
+  await snapshot.checkpoint({ stage: 'row-complete', row: 1, nTok: 2 });
+  await snapshot.checkpoint({ stage: 'row-complete', row: 'x', nTok: 2 });
+  assert.equal(snapshot.state.rows.length, 1, 'rows without an integer index are not summarized');
+  assert.equal(snapshot.state.rows[0].durationMs, null);
+});
+
+test('graph planning evidence compares repeats that end before any weight is read', () => {
+  const milestones = { 'ort-wasm-complete': { elapsedMs: 900 }, 'ort-session-start': { elapsedMs: 1646, metrics: { wasmHeapBytes: 24248320 } },
+    'ort-plan-start': { elapsedMs: 4379, metrics: { wasmHeapBytes: 24248320 }, gpuLedger: { requestedCurrent: 0 } } };
+  assert.deepEqual(ortPlanEvidence(milestones), { elapsedMs: 4379, sinceSessionStartMs: 2733, sinceWasmCompleteMs: 3479,
+    wasmHeapBytes: 24248320, gpuRequestedCurrent: 0 });
+  assert.equal(ortPlanEvidence({ 'ort-session-start': { elapsedMs: 1 } }), null);
+  assert.equal(ortPlanEvidence(undefined), null);
+  assert.equal(ortPlanEvidence({ 'ort-plan-start': {} }).sinceSessionStartMs, null);
+  const summary = diagnosticSummary({ status: 'running', last: { stage: 'ort-plan-start' }, milestones });
+  assert.equal(summary.ortPlan.sinceSessionStartMs, 2733);
+  assert.equal(diagnosticSummary({ last: {} }).ortPlan, null);
 });

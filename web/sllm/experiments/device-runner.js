@@ -2,24 +2,29 @@ import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentit
 import { runtimeRelease } from '../ort-runtime.js';
 import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice, runContext, parseDeviceLogNote } from './results.js';
 import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
-import { parseDeviceReport, matchDeviceReports } from './device-log.js';
+import { parseDeviceReport, matchDeviceReports, coverageLabel } from './device-log.js';
 
 const $ = id => document.getElementById(id);
 const storages = { local: localStorage, session: sessionStorage };
 const state = loadExperimentState(storages);
 const save = () => saveExperimentState(state, storages);
 let worker, sessionResult, evaluationCount = 0, finishing = false, repeatWait = null;
+// iOS defaults follow the September 13 phone results: resident inference ended
+// in every session, streamed loads and probes completed, and a third rapid
+// cached load twice ended at `ort-plan-start`. Stored choices still win.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const IOS_DEFAULTS = { modelExecution: 'streamed', repeatDelay: 30 };
 const controlIds = ['device', 'mode', 'staging', 'repeats', 'repeatDelay', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
 // Exports without OS/browser versions cannot be compared; the model name is still typed by hand.
 $('device').value = state.device || describeDevice(navigator.userAgent); $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
 $('diagnosticsMode').value = state.diagnosticsMode || 'compact';
 $('tokenizerFormat').value = state.tokenizerFormat || 'json';
-$('modelExecution').value = state.modelExecution || 'resident';
+$('modelExecution').value = state.modelExecution || (isIOS ? IOS_DEFAULTS.modelExecution : 'resident');
 $('sessionIdle').value = String(state.sessionIdle ?? 0);
 $('inspector').value = state.inspector || 'unknown';
 $('repeats').value = String(state.repeats || 1);
-$('repeatDelay').value = String(state.repeatDelay ?? 0);
+$('repeatDelay').value = String(state.repeatDelay ?? (isIOS ? IOS_DEFAULTS.repeatDelay : 0));
 $('kind').value = state.kind || 'resident';
 function updateControls() {
   const evaluationURL = new URL('../../../index.html', location.href);
@@ -37,12 +42,17 @@ function updateControls() {
     $('staging').disabled = $('kind').value === 'tokenizer';
     $('tokenizerFormat').disabled = ['resident', 'resident-opfs', 'runtime', 'runtime-resident', 'session-only'].includes($('kind').value);
     $('sessionIdle').disabled = $('kind').value !== 'session-only';
+    // The staging size applies to streamed loading and its per-token output
+    // scratch as well; 2 MiB is no longer forced for the streamed path.
     $('modelExecution').disabled = !['session-only', 'load', 'warm-load', 'probe', 'evaluation'].includes($('kind').value);
-    if (!$('modelExecution').disabled && $('modelExecution').value === 'streamed') $('staging').disabled = true;
   }
 }
 $('kind').addEventListener('change', updateControls);
 for (const id of ['mode', 'staging', 'diagnosticsMode', 'tokenizerFormat', 'modelExecution']) $(id).addEventListener('change', updateControls);
+// Session start to graph planning, with the WASM heap at that point: the
+// comparison for repeats that end at `ort-plan-start` before any weight.
+const ortPlanLabel = plan => !plan ? '—' : [plan.sinceSessionStartMs == null ? null : `세션 시작 후 ${(plan.sinceSessionStartMs / 1000).toFixed(1)}초`,
+  plan.wasmHeapBytes == null ? null : `heap ${(plan.wasmHeapBytes / 2**20).toFixed(1)} MiB`].filter(Boolean).join(' · ') || '기록됨';
 const inferenceLabel = phase => ({ warmup: '워밍업(첫 추론)', evaluation: '평가 추론', probe: '짧은 추론' }[phase] || '추론');
 function render() {
   const series = seriesSummary(state.results, state.active);
@@ -75,7 +85,7 @@ function render() {
       (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
       `${comparison.loadedInitializerCount ?? '—'} / ${comparison.expectedInitializerCount ?? '?'}`,
       mib(comparison.gpuWeightAllocated), mib(comparison.gpuRequestedCurrent), `${mib(comparison.gpuWriteReturnedBytes)} / ${mib(comparison.gpuQueueCompletedBytes)}`,
-      location, trackingLabel(comparison.trackingStatus),
+      location, trackingLabel(comparison.trackingStatus), ortPlanLabel(comparison.ortPlan),
       result.durationMs == null ? '—' : `${(result.durationMs / 1000).toFixed(1)}초`]) {
       const td = document.createElement('td'); td.textContent = value; tr.append(td);
     }
@@ -225,7 +235,6 @@ async function begin(config) {
   if (isResident(config.kind)) config.mode = null;
   if (config.kind === 'tokenizer') config.stagingMiB = null;
   if (!['session-only', 'load', 'warm-load', 'probe', 'evaluation'].includes(config.kind)) config.modelExecution = 'resident';
-  if (config.modelExecution === 'streamed') config.stagingMiB = 2;
   state.kind = config.kind; $('kind').value = config.kind;
   const runId = config.runId || newRunId();
   state.active = { ...config, runId, runIds: [runId], phase: 'execution', startedAt: Date.now() }; save();
@@ -360,13 +369,31 @@ $('deviceLogFiles').addEventListener('change', async event => {
     if (current && current.matchedBy !== 'report') { kept.push(deviceLog.file); continue; }
     state.results[index].deviceLog = deviceLog; applied++;
   }
+  // Every report the tester dropped in is kept with the results, matched or
+  // not, so the export says which files were examined and what they showed.
+  const clockedAt = Date.now();
+  const summaries = [
+    ...context.map(report => ({ ...report, matchedRows: [] })),
+    ...ignored.map(report => ({ ...report, coverage: null, matchedRows: [] })),
+    ...[...new Set(matched.map(entry => entry.file))].map(file => {
+      const report = reports.find(value => value.file === file);
+      return { file, kind: report?.kind ?? 'jetsam', reportedAt: report?.reportedAt ?? null, reportedAtText: report?.reportedAtText ?? null,
+        coverage: 'within-runs', freeMiB: report?.freeMiB ?? null, compressorMiB: report?.compressorMiB ?? null,
+        suspendedMiB: report?.suspendedMiB ?? null, suspendedTop: report?.suspendedTop ?? [], frontmost: report?.frontmost ?? [],
+        kills: (report?.kills ?? []).map(kill => `${kill.name} ${kill.reason}`),
+        matchedRows: matched.filter(entry => entry.file === file).map(entry => entry.runId) };
+    }),
+  ].map(report => ({ ...report, recordedAt: clockedAt }));
+  state.deviceReports = [...(state.deviceReports || []).filter(report => !summaries.some(value => value.file === report.file)), ...summaries].slice(-32);
   save(); render();
   const parts = [`${applied}개 행에 기기 로그를 기록했습니다.`];
   if (kept.length) parts.push(`손으로 적은 메모가 있어 건너뜀 ${kept.length}건`);
   if (unmatched.length) parts.push(`짝지을 중단 행이 없는 WebContent 종료 ${unmatched.length}건 (${unmatched.map(kill => `${kill.file} pid ${kill.pid} ${kill.reason} ${kill.footprintMiB ?? '?'} MiB`).join(', ')})`);
   for (const report of context) {
     const web = report.webContent.map(process => `WebContent pid ${process.pid} ${process.footprintMiB ?? '?'} MiB (최대 ${process.lifetimeMaxMiB ?? '?'})`).join(', ');
-    parts.push(`${report.file}: WebContent 종료 없음${report.kills.length ? ` · 종료 ${report.kills.join(', ')}` : ''}${report.freeMiB == null ? '' : ` · 시스템 여유 ${report.freeMiB} MiB`}${web ? ` · ${web}` : ''}`);
+    const pressure = [report.freeMiB == null ? null : `시스템 여유 ${report.freeMiB} MiB`, report.compressorMiB == null ? null : `압축기 ${report.compressorMiB} MiB`,
+      report.suspendedMiB == null ? null : `일시정지 앱 ${report.suspendedMiB} MiB`, report.frontmost?.length ? `전면 ${report.frontmost.join(', ')}` : null].filter(Boolean).join(' · ');
+    parts.push(`${report.file}: ${coverageLabel(report)} · WebContent 종료 없음${report.kills.length ? ` · 종료 ${report.kills.join(', ')}` : ''}${pressure ? ` · ${pressure}` : ''}${web ? ` · ${web}` : ' · 브라우저 WebContent 프로세스 없음'}`);
   }
   for (const report of ignored) parts.push(`${report.file}: ${report.kind === 'resource' ? `리소스 리포트 (${report.event ?? '종류 미상'}), 종료 아님` : report.error || '읽을 수 없는 형식'}`);
   $('status').textContent = parts.join(' · ');
@@ -390,6 +417,7 @@ $('export').onclick = async () => {
       sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats,
       repeatDelay: state.repeatDelay ?? 0 },
     active: state.active, results, series: seriesSummary(results, state.active),
+    deviceReports: state.deviceReports || [],
     memoryNote: 'Logical allocation counters are not process RSS. Device logs are needed to confirm termination causes.',
     runs: runs.filter(Boolean) }, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
