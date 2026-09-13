@@ -24,6 +24,11 @@ def configuration(path):
              'ai.onnx;17;Add,MatMul']
     for domain, names in sorted(operations.items()):
         lines.append(f'{domain or "ai.onnx"};{versions[domain]};{",".join(sorted(names))}')
+    # transformers.js sampling (do_sample with top_k/top_p) lazily creates a
+    # 73-byte TopK graph (TensorOpRegistry.top_k, opset 21) on the first sampled
+    # token. It runs on the CPU/WASM provider and is not part of the model graph.
+    lines.append('# transformers.js TensorOpRegistry.top_k helper used by sampling')
+    lines.append('ai.onnx;21;TopK')
     return '\n'.join(lines) + '\n'
 
 

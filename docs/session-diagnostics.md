@@ -39,6 +39,75 @@ longer has to be reconstructed from exports by hand. The next comparisons are
 three 2c repeats at 8 MiB, then 2c and full load with `modelExecution=streamed`
 (about 423 MiB resident), with exports and device logs kept from the same runs.
 
+## September 13 afternoon exports (release `7f6d4c99f9ac`, commit `3ecd6ce`)
+
+Same iPhone, same settings, nine OPFS cache hits, no persisted GPU fault, no
+device loss. Recovery on every interrupted run recorded `no-unload-event`, a
+re-entry gap under 1.2 s and `navigationType: back_forward`.
+
+| UTC | Screen / experiment | Outcome |
+|---|---|---|
+| 05:30:17 | Evaluation page session create | 251/251, 1,023 MiB, `ready` in 12.1 s |
+| 05:30:30 | Evaluation page warmup (greedy, 4 tokens) | complete in 2.0 s |
+| 05:30:32 | Evaluation page row 1 (sampled) | **failed in code** at 0.6 s before the first token, see below |
+| 05:33:14-05:36:24 | 1, 1b, 1c, 1d, small runtime 120 s, 2b | all complete |
+| 05:36:43 | 2c session-only | interrupted at 214/251 (`embed_tokens.chunk9`), 901 MiB allocated, page back after 1.1 s |
+| 05:37:26 | 3 full load | 251/251, `ready` in 8.3 s |
+| 05:38:07 | 4 cached load 1/5 | 251/251, `ready` in 9.0 s |
+| 05:38:16 | 4 cached load 2/5 | interrupted at 188/251 (`embed_tokens.chunk0`), 782 MiB, page back after 0.7 s |
+| 05:38:47 | 5 short inference | load 251/251 `ready` in 8.7 s, then interrupted 47 ms after `probe-inference-start`, page back after 0.4 s |
+
+The three experiment interruptions repeat the morning pattern: identical
+initializer order (each interrupted order is a prefix of the successful loads),
+the same upload rate, and stops between 782 MiB and 1,023 MiB of resident FP32
+weights. 2c reached the same initializer about 1.1 s later than the successful
+full load despite skipping the tokenizer, which is compatible with system memory
+pressure but does not prove it. Nothing in these runs points at the page's code.
+
+The evaluation-page failure was different: the export held only a stack,
+`phase@range-loader.js:77:37` called from ORT's `createSession`, with no
+message, because JavaScriptCore stacks omit the message and the worker stored
+`error.stack`. The message was `Session phase after loader close`. With
+`do_sample: true` and `top_k: 64` from `generation_config.json`, transformers.js
+creates a tiny ONNX `TopK` session on the first sampled token
+(`TensorOpRegistry.top_k`, 73 bytes, no initializers). That creation passes
+through the same `__ortExternalTensorLoader.phase('ort-session-start')` hook as
+the model session, and the sealed range loader refused it. Warmup and the short
+probes use greedy decoding, so they never reached this path; the browser smoke
+test only ran greedy probes; and the phone had never survived warmup before, so
+the check added in `884ad11` stayed latent until this run.
+
+Allowing the phase exposed a second, older gap on desktop (SwiftShader): the
+mobile runtime is a reduced-operator build generated from the deployment graph
+(`model/required-operators.config`), and that graph contains no `TopK`, so the
+auxiliary session then failed with `Could not find an implementation for
+TopK(11)`. Sampled evaluation rows therefore could not have run on any device
+with the mobile build; the smoke test's greedy probes never noticed.
+
+Changes:
+
+- **Auxiliary sessions after seal.** A sealed `SessionRangeLoader` now records
+  ORT lifecycle phases from later sessions as `auxiliary-session-start`,
+  `auxiliary-session-phase` (`ortPhase` carries the native phase) and
+  `auxiliary-session-complete`, with an `auxiliarySession` ordinal and the
+  sealed model metrics. The model session's `ort-*` milestones are never
+  overwritten. Weight reads and initializer allocations after seal still throw.
+  Abort, device loss and GPU errors are still checked first.
+- **Warmup samples.** The evaluation warmup now uses the same generation settings
+  as the rows (sampling, 4 tokens), so the top_k session is created inside the
+  discarded warmup instead of inside row 1's TTFT. The seed is restored after
+  warmup as before.
+- **Error text.** Failure summaries and `fatal` messages store the message
+  followed by the stack (`errorText`), so Safari exports name the cause.
+- **TopK kernel.** `tools/create_ort_config.py` now appends `ai.onnx;21;TopK`
+  (the CPU kernel registered for opsets 11-23) so the reduced mobile build can
+  create the transformers.js top_k session. The native runtime has to be rebuilt
+  (`tools/build-ort.sh`); CI's runtime cache key includes the config file.
+- **Sampled probe.** The `probe` message accepts `sampled: true`, which adds one
+  sampled token on the shortest prompt after the two greedy outputs
+  (`sampledOutput`). The app-path smoke test uses it and asserts exactly one
+  auxiliary session with no change to the GPU ledger.
+
 This follow-up adds a comparison and lowers diagnostic persistence overhead.
 FP32 model weights, tokenizer, generation settings, evaluation inputs and graph
 optimization settings are unchanged. Native changes add lifecycle checkpoints;
@@ -77,6 +146,10 @@ wrappers remain synchronous where the API is synchronous; asynchronous pipeline
 creation returns its original promise. The additive native diagnostic version
 is 1; the external-range ABI remains 2. Building from an older factory fails
 explicitly and requires rebuilding the native runtime.
+
+Phases raised after the model session is sealed (transformers.js's lazily created
+`top_k` session, for example) are recorded as `auxiliary-session-*` records and do
+not touch the model session's milestones.
 
 `gpuLedger.categories` separates production weights, runtime fixture weights,
 verification buffers and other requests. It reports requested bytes, creation

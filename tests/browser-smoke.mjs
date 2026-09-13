@@ -342,7 +342,7 @@ try {
               environment: { tokenizerFormat: format } });
             if (data.type === 'session-result') sessionResult = data.result;
             if (data.type === 'fatal') { clearTimeout(timer); worker.terminate(); reject(new Error(data.error)); }
-            if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2 });
+            if (data.type === 'ready') worker.postMessage({ type: 'probe', runId: probeRunId, maxNewTokens: 2, sampled: true });
             if (data.type === 'probe-result') { probeResult = data.result; worker.postMessage({ type: 'dispose' }); }
             if (data.type === 'disposed') {
               clearTimeout(timer); worker.terminate();
@@ -354,7 +354,7 @@ try {
                   const loaded = await readRun(loadRunId);
                   resolve({ id: `app-from-pretrained-${format}`, ...sessionResult, ...probeResult, cleanupVerified: true,
                     loadStatus: loaded.status, loadMilestones: loaded.milestones,
-                    probeEnvironment: run.environment });
+                    probeEnvironment: run.environment, probeMilestones: run.milestones });
                 } catch (error) { reject(error); }
               }
             }
@@ -378,6 +378,16 @@ try {
       assert.equal(result.storage.rangeReadBytes, result.metrics.totalExternalTensorBytes);
       assert.ok(result.timings.modelLoadCallMs >= 0);
       assert.equal(result.loadMilestones['tokenizer-ready'].tokenizerFormat, format);
+      // Sampling creates transformers.js's top_k session after the range loader is sealed.
+      // It must be recorded as an auxiliary session, never refused or mistaken for the model session.
+      assert.equal(result.sampledOutput?.tokens.length, 1, 'the sampled probe exercises the evaluation sampling path');
+      assert.equal(result.probeMilestones['auxiliary-session-start']?.auxiliarySession, 1, 'one auxiliary ORT session after seal');
+      assert.equal(result.probeMilestones['auxiliary-session-complete']?.auxiliarySession, 1);
+      assert.equal(result.probeMilestones['auxiliary-session-complete'].gpuLedger.requestedCurrent,
+        result.probeMilestones['auxiliary-session-start'].gpuLedger.requestedCurrent, 'auxiliary sessions request no GPU memory');
+      assert.equal(result.probeMilestones['ort-session-start'], undefined, 'auxiliary phases never overwrite model session milestones');
+      assert.equal(result.loadMilestones['ort-session-start'].sessionDiagnosticsVersion, 1);
+      assert.equal(result.loadMilestones['auxiliary-session-start'], undefined);
     }
     // Exercise A/B/C through the actual UI, sharing only verified OPFS storage.
     // Every case creates a fresh page/worker and uses the production JS imports.

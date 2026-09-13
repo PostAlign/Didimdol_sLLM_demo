@@ -5,7 +5,7 @@ const runtimeMode = new URL(self.location.href).searchParams.get('ortMode') || '
 const { ort, AutoModelForCausalLM, AutoTokenizer, AutoConfig, Gemma3ForCausalLM, BaseStreamer,
   InterruptableStoppingCriteria, env, random, build: runtimeBuild } = await import(`./runtime.js?mode=${runtimeMode}`);
 import { SessionRangeLoader } from './range-loader.js';
-import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint } from './diagnostics.js';
+import { RunDiagnostics, newRunId, buildIdentity, gpuOperationContext, saveCheckpoint, errorText } from './diagnostics.js';
 import { OpfsWeightStore, acquireModelLease } from './opfs-store.js';
 import { installGpuTracking } from './gpu-device.js';
 import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-loader.js';
@@ -537,13 +537,15 @@ async function runAll() {
   random.seed(SEED);   // 동일 시드 → 동일 결과. do_sample 이라 이게 없으면 매번 달라진다.
 
   // 워밍업: 첫 추론에는 ORT 커널 컴파일이 섞인다. 1행 TTFT 가 혼자 튀지 않게 버린다.
+  // 평가 행과 같은 샘플링 경로를 쓴다. transformers.js 는 첫 샘플링 토큰에서 top_k 용
+  // 보조 ORT 세션을 지연 생성하므로, 그 비용도 측정 구간 밖(워밍업)에서 치른다.
   post({ type: 'phase', text: '워밍업 중…' });
   stopper.reset();
   await recordMemory('warmup-start');
   const warmup = await generateOwned(tokenizer.apply_chat_template(rows[0].messages.slice(0, -1), {
       chat_template: chatTemplate, add_generation_prompt: true, return_dict: true,
     }),
-    { do_sample: false, max_new_tokens: 4, stopping_criteria: stopper,
+    { ...GEN, max_new_tokens: 4, stopping_criteria: stopper,
   }, { phase: 'warmup' });
   warmup.dispose();
   await recordMemory('warmup-complete');
@@ -565,7 +567,7 @@ async function runAll() {
     } catch (e) {
       // 실패 위치를 표시하고 종료한다. 불완전한 실행의 평균은 표시하지 않는다.
       const elapsed = performance.now() - t0;
-      const error = String(e?.stack ?? e?.message ?? e);
+      const error = errorText(e);
       done.push({
         turns: rows[i].messages.length / 2, promptLen: 0, nTok: 0, eos: false,
         ttft: elapsed, total: elapsed, tps: 0,
@@ -596,7 +598,7 @@ async function runAll() {
   post(result);
 }
 
-async function runProbe(maxNewTokens = 32) {
+async function runProbe(maxNewTokens = 32, sampled = false) {
   if (!Number.isInteger(maxNewTokens) || maxNewTokens < 1 || maxNewTokens > 32) throw new Error('Probe token count must be 1–32');
   const lengths = rows.map((row, index) => {
     const inputs = tokenizer.apply_chat_template(row.messages.slice(0, -1), {
@@ -621,7 +623,25 @@ async function runProbe(maxNewTokens = 32) {
     finally { result.dispose(); }
     await recordMemory('probe-inference-complete', { row: index + 1 });
   }
-  const result = { success: !aborted, outputs, gpuLedger: { ...trackedGpu.ledger }, sessionMetrics };
+  // Optional sampled token on the shortest prompt: exercises the evaluation
+  // sampling path (top_k auxiliary session) without changing the greedy baseline.
+  let sampledOutput = null;
+  if (sampled && !aborted) {
+    const { index, length } = lengths[0];
+    stopper.reset();
+    random.seed(SEED);
+    await recordMemory('probe-inference-start', { row: index + 1, promptLen: length, sampled: true });
+    post({ type: 'phase', text: `샘플링 추론 확인 중… 입력 ${length}토큰` });
+    const inputs = tokenizer.apply_chat_template(rows[index].messages.slice(0, -1), {
+      chat_template: chatTemplate, add_generation_prompt: true, return_dict: true });
+    const start = performance.now();
+    const result = await generateOwned(inputs, { ...GEN, max_new_tokens: 1, stopping_criteria: stopper }, { phase: 'probe', row: index + 1 });
+    try { sampledOutput = { row: index + 1, promptLen: length, durationMs: performance.now() - start,
+      tokens: result.tolist()[0].slice(length).map(Number), sampled: true }; }
+    finally { result.dispose(); }
+    await recordMemory('probe-inference-complete', { row: index + 1, sampled: true });
+  }
+  const result = { success: !aborted, outputs, sampledOutput, gpuLedger: { ...trackedGpu.ledger }, sessionMetrics };
   await journal.finish(aborted ? 'cancelled' : 'complete', result);
   post({ type: 'probe-result', result });
 }
@@ -685,17 +705,17 @@ self.onmessage = async ({ data }) => {
       else await execute(true);
     } else {
       if (!model || !tokenizer || !rouge1) throw new Error('Model and tokenizer must both be prepared');
-      if (data.type === 'probe') await runProbe(data.maxNewTokens);
+      if (data.type === 'probe') await runProbe(data.maxNewTokens, data.sampled === true);
       else await runAll();
     }
   } catch (err) {
     const cancelled = aborted || !!loadController?.signal.aborted;
     const inference = lastInference; lastInference = null;
-    await journal.finish(cancelled ? 'cancelled' : 'failed', { error: String(err?.stack ?? err), sessionMetrics,
+    await journal.finish(cancelled ? 'cancelled' : 'failed', { error: errorText(err), sessionMetrics,
       tokenizer: tokenizerResult, observedDuring: journal.state.last?.stage, ...(inference ? { inference } : {}) });
     await cleanupWorker();
     // A failed create/generate is terminal; cleanup does not authorize reuse.
-    post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : String(err?.stack ?? err) });
+    post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : errorText(err) });
   } finally {
     if (modelExecution === 'streamed' && model) weightStore?.closeActive();
     else weightStore?.close();

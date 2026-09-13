@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText } from '../web/sllm/diagnostics.js';
 
 test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
   const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
@@ -245,4 +245,14 @@ test('run journals serialize persistence, isolate IDs and retain a GPU fault aft
   await snapshotRun('two', {}, persist).checkpoint({ stage: 'load-start' });
   assert.equal(saved.get('run:one').runId, 'one');
   assert.equal(saved.get('run:two').runId, 'two');
+});
+
+test('error text keeps the message when a JavaScriptCore stack omits it', () => {
+  const jsc = Object.assign(new Error('Session phase after loader close'),
+    { stack: 'phase@https://example.test/range-loader.js:77:37\n@https://example.test/ort.asyncify.mjs:2:8897' });
+  assert.equal(errorText(jsc), `Session phase after loader close\n${jsc.stack}`);
+  const v8 = Object.assign(new Error('boom'), { stack: 'Error: boom\n    at f (x.js:1:1)' });
+  assert.equal(errorText(v8), v8.stack, 'a stack that already carries the message is stored once');
+  assert.equal(errorText(Object.assign(new Error('no stack'), { stack: undefined })), 'no stack');
+  assert.equal(errorText('plain'), 'plain');
 });

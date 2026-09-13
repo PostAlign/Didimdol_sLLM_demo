@@ -195,3 +195,30 @@ test('queue errors are persisted with their operation before cleanup can fail', 
   assert.equal(f.loader.busy, false);
   f.loader.close(false);
 });
+
+test('sealed loaders record auxiliary ORT sessions and still refuse weight reads', async () => {
+  const f = fixture(), records = [];
+  const checkpoint = f.loader.checkpoint;
+  f.loader.checkpoint = async record => { records.push(structuredClone(record)); await checkpoint(record); };
+  await f.loader.phase('ort-session-start', { sessionDiagnosticsVersion: 1 });
+  await f.loader.load(f.request);
+  await f.loader.phase('ort-session-complete');
+  f.loader.close(true);
+  // transformers.js creates the top_k session on the first sampled token, after the model session is sealed.
+  await f.loader.phase('ort-session-start', { sessionDiagnosticsVersion: 1 });
+  await f.loader.phase('ort-plan-start');
+  await f.loader.phase('ort-session-complete');
+  await f.loader.phase('ort-session-start', { sessionDiagnosticsVersion: 1 });
+  const auxiliary = records.filter(record => record.stage.startsWith('auxiliary-'));
+  assert.deepEqual(auxiliary.map(record => [record.stage, record.ortPhase, record.auxiliarySession]), [
+    ['auxiliary-session-start', 'ort-session-start', 1], ['auxiliary-session-phase', 'ort-plan-start', 1],
+    ['auxiliary-session-complete', 'ort-session-complete', 1], ['auxiliary-session-start', 'ort-session-start', 2]]);
+  assert.equal(auxiliary[0].sessionDiagnosticsVersion, 1);
+  assert.equal(auxiliary[0].metrics.loadedInitializerCount, 1, 'auxiliary records carry the sealed model metrics');
+  assert.deepEqual(records.filter(record => record.stage.startsWith('ort-')).map(record => record.stage),
+    ['ort-session-start', 'ort-session-complete'], 'the model session milestones are never overwritten');
+  assert.equal(f.loader.auxiliarySessionCount, 2);
+  await assert.rejects(f.loader.phase('session-start'), /Invalid ORT lifecycle phase/);
+  await assert.rejects(f.loader.load(f.request), /after session creation/);
+  await assert.rejects(f.loader.beforeAllocate('W', false), /after session creation/);
+});

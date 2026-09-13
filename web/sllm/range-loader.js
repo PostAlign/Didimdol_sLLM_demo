@@ -26,6 +26,7 @@ export class SessionRangeLoader {
     this.devices = new WeakSet();
     this.closed = false;
     this.busy = false;
+    this.auxiliarySessionCount = 0;
     this.scratch = null;
     this.metrics = {
       cpuStagingCurrent: 0, cpuStagingPeak: 0, wasmTempCurrent: 0, wasmTempPeak: 0,
@@ -74,8 +75,20 @@ export class SessionRangeLoader {
   }
   async phase(stage, details = {}) {
     this.check();
-    if (this.closed) throw new Error('Session phase after loader close');
     if (!stage.startsWith('ort-')) throw new Error('Invalid ORT lifecycle phase');
+    if (this.closed) {
+      // After the model session is sealed, transformers.js still creates small
+      // auxiliary ORT sessions on demand (for example the top_k graph used by
+      // sampling on the first sampled token). Those sessions carry no external
+      // weights, so they are recorded separately instead of being refused;
+      // weight reads and initializer allocations after close remain errors.
+      if (stage === 'ort-session-start') this.auxiliarySessionCount++;
+      const auxiliary = { 'ort-session-start': 'auxiliary-session-start', 'ort-session-complete': 'auxiliary-session-complete' }[stage]
+        || 'auxiliary-session-phase';
+      await this.checkpoint({ stage: auxiliary, ortPhase: stage, auxiliarySession: this.auxiliarySessionCount, ...details,
+        metrics: this.sampleMetrics(), gpuLedger: this.gpuLedger() });
+      return;
+    }
     await this.checkpoint({ stage, ...details, metrics: this.sampleMetrics(), gpuLedger: this.gpuLedger(),
       ortWasmInstantiated: stage === 'ort-wasm-complete' || undefined });
   }

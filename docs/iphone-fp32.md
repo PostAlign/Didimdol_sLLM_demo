@@ -270,6 +270,9 @@ bash tools/build-ort.sh jspi
 
 Defaults: `ORT_PROFILE=mobile`, `ORT_THREADS=0`. The mobile configuration uses
 `model/required-operators.config` for this graph and keeps FP32/int/bool types.
+The generated file also lists `TopK` (opset 21) for the small session that
+transformers.js creates on the first sampled token; without it sampled evaluation
+rows fail with a missing `TopK(11)` kernel.
 This is a compile-time single-thread build, not just `numThreads=1` at runtime.
 For controlled comparisons, `ORT_PROFILE=baseline ORT_THREADS=1` retains the upstream broad
 operator configuration. Each combination has its own build directory. Building a comparison
@@ -311,7 +314,7 @@ Open `web/sllm/experiments/` on the actual phone, enter the complete OS/browser 
 | Full session only | Same session-creation path as full load, with tokenizer preparation omitted. Reports session completion separately from application readiness. |
 | Full load | Actual app/from_pretrained path with verified OPFS weights. |
 | Five cached loads | Five fresh pages/workers reusing completed files. Run after the first full load. |
-| Short inference | Actual shortest (35 tokens) and longest (266 tokens) evaluation inputs, up to 32 greedy tokens each. |
+| Short inference | Actual shortest (35 tokens) and longest (266 tokens) evaluation inputs, up to 32 greedy tokens each. The worker also accepts `sampled: true` (used by the smoke test) for one extra sampled token that creates the top_k auxiliary session. |
 | Two evaluations | Two full 100-row evaluations in one session with per-row GPU allocation snapshots. |
 
 Successful repeated-load experiments deliberately navigate to the next page. Unexpected

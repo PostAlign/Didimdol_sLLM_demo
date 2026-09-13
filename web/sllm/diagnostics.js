@@ -77,6 +77,7 @@ const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-ver
   'resident-start',
   'session-create', 'session-create-complete', 'session-create-failed', 'tokenizer-load', 'runtime-create',
   'runtime-inference-complete', 'runtime-idle-start', 'runtime-idle-complete', 'session-idle-start', 'session-idle-complete',
+  'auxiliary-session-start', 'auxiliary-session-complete',
   'ready', 'complete', 'failed', 'cancelled']);
 const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error', 'streamed-error',
   'tokenizer-error', 'template-error', 'evaluation-data-error']);
@@ -91,6 +92,13 @@ export const buildIdentity = build => ({ releaseId: build.releaseId, provenance:
 
 export const errorDetails = error => ({ errorType: error?.constructor?.name || error?.name || 'Error',
   message: String(error?.message ?? error) });
+
+/** Message plus stack for exports. JavaScriptCore stacks omit the message, so it is never dropped here. */
+export const errorText = error => {
+  const { message } = errorDetails(error);
+  const stack = error?.stack == null ? '' : String(error.stack);
+  return !stack ? message : stack.includes(message) ? stack : `${message}\n${stack}`;
+};
 
 export const gpuOperationContext = record => ({ observedDuring: record?.stage,
   ...Object.fromEntries(['initializerName', 'shape', 'index', 'offset', 'length', 'location',
