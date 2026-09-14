@@ -82,6 +82,16 @@ const MILESTONES = new Set(['load-start', 'run-start', 'probe-start', 'graph-ver
 const FAULTS = new Set(['device-lost', 'worker-error', 'gpu-uncaptured-error', 'gpu-error', 'loader-error', 'streamed-error',
   'ort-wasm-error', 'tokenizer-error', 'template-error', 'evaluation-data-error']);
 const isPreparation = stage => /^(tokenizer|template|evaluation-data)-/.test(stage);
+// Pre-call position records: written before a guarded read, write or wait so an
+// interruption leaves its position, then superseded by the next record. They
+// update the durable head only and stay out of the 64-slot event ring, which
+// keeps the allocation/completion pace of every initializer instead of the
+// three or four pieces of the last few. A full load on the September 14 phone
+// wrote 3,255 entries (6.3 MB) with them in the ring.
+const POSITION_ONLY = new Set(['upload-initializer', 'range-read', 'gpu-write', 'gpu-wait',
+  'resident-read', 'resident-write', 'resident-wait']);
+const PERSISTENCE_NOTE = 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings. '
+  + 'serializedBytes is the JSON length of committed compact entries, not the bytes IndexedDB wrote to disk.';
 
 // Keep binary hashes in diagnostics without copying the entire site inventory at every checkpoint.
 export const buildIdentity = build => ({ releaseId: build.releaseId, provenance: build.provenance,
@@ -211,6 +221,11 @@ export function diagnosticSummary(run, sessionFallback = null) {
       run.milestones?.['session-create']?.tokenizerPrepared ?? null),
     tokenizerFormat: run.summary?.tokenizer?.tokenizerFormat ?? run.milestones?.['tokenizer-ready']?.tokenizerFormat ?? null,
     recoveryClassification: run.recovery?.classification ?? null,
+    // The worker writes `stopSource` when the page's stop message ended a run;
+    // the pages write a `user-cancelled` position when they end a worker themselves.
+    stopSource: run.summary?.stopSource ?? (last.stage === 'user-cancelled' ? 'user-stop' : null),
+    completedRows: run.summary?.completedRows
+      ?? (run.status === 'cancelled' && run.milestones?.['evaluation-rows'] ? (Array.isArray(run.rows) ? run.rows.length : 0) : null),
     unloadEvidence: run.recovery?.unloadEvidence ?? null, reentryGapMs: run.recovery?.reentryGapMs ?? null,
     navigationType: run.recovery?.navigationType ?? null,
     jsMemory: last.jsMemory ?? null,
@@ -257,6 +272,12 @@ export function ortPlanEvidence(milestones) {
 
 export const trackingLabel = status => ({ complete: '정상', partial: '부분 관측', unbound: '연결 미확인', unknown: '미기록' }[status] || '미기록');
 
+/** Label for a cancelled run: who stopped it and how many evaluation rows had finished. */
+export function stopLabel(summary) {
+  const rows = Number.isInteger(summary?.completedRows) ? ` · ${summary.completedRows}행 완료` : '';
+  return summary?.stopSource === 'user-stop' ? `사용자 정지${rows}` : `중단됨 (정지 출처 미기록)${rows}`;
+}
+
 /** Recovery is evidence from a later page, never a rewrite of the interrupted worker's last/fault. */
 export async function recordRecovery(run, context = {}) {
   if (!run?.runId) return null;
@@ -287,10 +308,9 @@ export class RunDiagnostics {
     this.dirty = new Map();
     this.state = { schemaVersion: 4, runId, startedAt: Date.now(), status: 'running', environment,
       records: [], last: null, fault: null, firstFault: null, summary: null,
-      milestones: {}, files: {}, preparation: {}, initializerOrder: [], rows: [], droppedInitializers: 0, recordCount: 0,
+      milestones: {}, files: {}, preparation: {}, initializerOrder: [], rows: [], droppedInitializers: 0, recordCount: 0, eventCount: 0,
       persistence: { mode: this.mode, completed: 0, failures: 0, totalMs: 0, peakMs: 0, entriesWritten: 0, serializedBytes: 0,
-        note: 'Timings cover completed writes before this snapshot; they are excluded from GPU operation timings. '
-          + 'serializedBytes is the JSON length of committed compact entries, not the bytes IndexedDB wrote to disk.' },
+        note: PERSISTENCE_NOTE },
       memoryNote: 'Allocation counters and WASM capacity are not process RSS or driver memory.' };
     this.pending = Promise.resolve();
   }
@@ -327,8 +347,12 @@ export class RunDiagnostics {
       this.state.recordCount++;
       this.state.last = value;
       const history = historyRecord(value);
-      this.state.records.push(history);
-      if (this.state.records.length > 64) this.state.records.shift();
+      const positionOnly = POSITION_ONLY.has(value.stage);
+      if (!positionOnly) {
+        this.state.eventCount++;
+        this.state.records.push(history);
+        if (this.state.records.length > 64) this.state.records.shift();
+      }
       this.state.updatedAt = value.timestamp;
       // Metadata deltas survive a failed transaction and are retried with the
       // next event. The history is a 64-slot ring; initializer metadata is capped.
@@ -344,9 +368,14 @@ export class RunDiagnostics {
       const row = this.state.rows.at(-1);
       if (value.stage === 'row-complete' && row?.timestamp === value.timestamp) delta(`row:${row.row}`, 'row', { value: row });
       if (this.state.fault === value || this.state.firstFault === value) delta('faults', 'faults', { fault: this.state.fault, firstFault: this.state.firstFault });
-      delta('head', 'head', { ...(history !== value ? { last: value } : {}), status: this.state.status, updatedAt: value.timestamp, recordCount: this.state.recordCount,
-        droppedInitializers: this.state.droppedInitializers, persistence: { ...this.state.persistence } });
-      delta(`event:${this.state.recordCount % 64}`, 'event', { sequence: this.state.recordCount, value: history });
+      // A position record or a truncated one is the head's `last`; otherwise the
+      // ring slot with the head's event count is. The persistence note is fixed
+      // text, re-attached by readRun rather than written with every head.
+      const { note, ...persistence } = this.state.persistence;
+      delta('head', 'head', { ...(positionOnly || history !== value ? { last: value } : {}), status: this.state.status, updatedAt: value.timestamp,
+        recordCount: this.state.recordCount, eventCount: this.state.eventCount,
+        droppedInitializers: this.state.droppedInitializers, persistence });
+      if (!positionOnly) delta(`event:${this.state.eventCount % 64}`, 'event', { sequence: this.state.eventCount, value: history });
       const prefix = journalPrefix(this.state.runId);
       const entries = [...this.dirty].map(([key, entry]) => [prefix + key, entry]);
       if (!this.headerSaved) entries.unshift([runKey(this.state.runId), {
@@ -397,8 +426,11 @@ export async function readRun(runId, options = {}) {
     value = { ...header, ...state, records: [], last: null, summary: null, fault: null, firstFault: null,
       milestones: {}, files: {}, preparation: {}, initializerOrder: [], rows: [] };
     const events = [];
+    // Journals before position-only records numbered ring slots by recordCount.
+    const eventCount = head.eventCount ?? head.recordCount;
+    if (value.persistence && !value.persistence.note) value.persistence = { ...value.persistence, note: PERSISTENCE_NOTE };
     for (const entry of entries) {
-      if (entry.kind === 'event' && entry.sequence <= head.recordCount && entry.sequence > head.recordCount - 64) events.push(entry);
+      if (entry.kind === 'event' && entry.sequence <= eventCount && entry.sequence > eventCount - 64) events.push(entry);
       if (entry.kind === 'milestone') value.milestones[entry.name] = entry.value;
       if (entry.kind === 'file') value.files[entry.name] = entry.value;
       if (entry.kind === 'preparation') {
@@ -413,7 +445,7 @@ export async function readRun(runId, options = {}) {
     events.sort((a, b) => a.sequence - b.sequence);
     value.rows.sort((a, b) => a.row - b.row);
     value.records = events.map(entry => entry.value);
-    value.last = head.last ?? events.find(entry => entry.sequence === head.recordCount)?.value ?? null;
+    value.last = head.last ?? events.find(entry => entry.sequence === eventCount)?.value ?? null;
     value.initializerOrder = value.initializerOrder.filter(Boolean);
   }
   const recovery = await read(`recovery:${runId}`);

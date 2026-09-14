@@ -111,9 +111,41 @@ test('range descriptors preserve bytes and checkpoint GPU writes with current al
   assert.deepEqual(f.uploaded, f.bytes.subarray(13));
   assert.equal(records.at(-1).stage, 'initializer-complete');
   assert.equal(f.loader.metrics.cpuStagingPeak, 8 * 2**20);
-  assert.equal(records.find(r => r.stage === 'gpu-write').storage.rangeReadBytes, 8 * 2**20);
   assert.equal(records.at(-1).storage.rangeReadBytes, 10 * 2**20);
   assert.equal(records.find(r => r.stage === 'upload-initializer').metrics.wasmHeapBytes, 65536);
+  // Pre-call position records keep the crash position and progress counters
+  // only; the allocation and completion records carry the full snapshots.
+  const positions = records.filter(r => SessionRangeLoader.POSITION_STAGES.has(r.stage));
+  assert.deepEqual(positions.map(r => r.stage), ['upload-initializer', 'range-read', 'gpu-write', 'gpu-wait', 'range-read', 'gpu-write', 'gpu-wait']);
+  for (const record of positions) {
+    assert.equal(record.storage, undefined, `${record.stage} omits storage`);
+    assert.deepEqual(Object.keys(record.metrics), SessionRangeLoader.POSITION_METRICS);
+    assert.equal(record.initializerName, 'W');
+  }
+  assert.equal(positions[3].destinationOffset, 0);
+  assert.equal(positions[6].destinationOffset, 8 * 2**20);
+  assert.equal(positions[6].metrics.gpuQueueCompletedBytes, 8 * 2**20, 'progress counters stay on position records');
+  assert.equal(JSON.stringify(positions[6]).length < JSON.stringify(records.at(-1)).length, true);
+  // `allocate-initializer` is recorded by the createBuffer hook, which this direct load() call bypasses.
+  const full = records.filter(r => !SessionRangeLoader.POSITION_STAGES.has(r.stage));
+  assert.deepEqual(full.map(r => r.stage), ['initializer-complete']);
+  assert.ok(full[0].storage && full[0].metrics.gpuWriteMs != null, 'the completion record keeps the full snapshot');
+});
+
+test('position records carry a slim ledger with tracking status and omit recent allocations', async () => {
+  const f = fixture(16), records = [];
+  const checkpoint = f.loader.checkpoint;
+  f.loader.checkpoint = async record => { records.push(structuredClone(record)); await checkpoint(record); };
+  f.loader.gpuLedger = () => ({ requestedCurrent: 16, observedPeak: 16, liveBufferCount: 1, bufferCount: 1, deviceLost: null, lastError: null,
+    tracking: { status: 'complete', activeDeviceId: 1, deviceCount: 1, devices: [{ id: 1, fullHistory: true }] },
+    categories: [{ role: 'weight' }], programs: { shaderModules: 0 }, recentAllocations: [{ id: 1 }, { id: 2 }] });
+  await f.loader.load(f.request);
+  const position = records.find(r => r.stage === 'gpu-wait');
+  assert.deepEqual(position.gpuLedger, { requestedCurrent: 16, observedPeak: 16, liveBufferCount: 1, bufferCount: 1, deviceLost: null, lastError: null,
+    tracking: { status: 'complete', activeDeviceId: 1, deviceCount: 1 }, recentAllocationsOmitted: 2, positionRecord: true });
+  assert.equal(records.find(r => r.stage === 'initializer-complete').gpuLedger.recentAllocations.length, 2, 'full records keep the list');
+  assert.equal(SessionRangeLoader.positionLedger(null), null);
+  assert.equal(SessionRangeLoader.positionLedger({ requestedCurrent: 4 }).recentAllocationsOmitted, 0);
 });
 
 test('device-lost is emitted only after durable persistence finishes', async () => {

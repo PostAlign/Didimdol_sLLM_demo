@@ -47,19 +47,34 @@ export class SessionRangeLoader {
   event(stage, details = {}) {
     this.emit({ stage, ...details, metrics: { ...this.metrics }, timestamp: Date.now() });
   }
-  // The three pre-call range records of every staging piece are the bulk of a
-  // load's IndexedDB traffic (about 2,300 transactions per full load on the
-  // September 13 phone). They keep the ledger totals and categories but drop the
-  // recent-allocation list, which `allocate-initializer` records already carry.
-  static SLIM_LEDGER_STAGES = new Set(['range-read', 'gpu-write', 'gpu-wait']);
+  // The pre-call records of every initializer and staging piece are the bulk of
+  // a load's IndexedDB traffic (3,255 entries and 6.3 MB per full load on the
+  // September 14 phone). They exist to hold the crash position durably before a
+  // read, write or wait, so they carry the position and the progress counters
+  // only; `allocate-initializer` and `initializer-complete` keep the full
+  // metrics, ledger and storage snapshots. The journal keeps these position
+  // records out of its event ring as well (see RunDiagnostics).
+  static POSITION_STAGES = new Set(['upload-initializer', 'range-read', 'gpu-write', 'gpu-wait']);
+  static POSITION_METRICS = ['gpuWeightAllocated', 'gpuWeightUploaded', 'gpuWriteReturnedBytes', 'gpuQueueCompletedBytes',
+    'gpuValidatedInitializerCount', 'loadedInitializerCount', 'cpuStagingCurrent', 'wasmHeapBytes', 'deviceLost'];
+  static positionLedger(ledger) {
+    if (!ledger) return ledger;
+    const { requestedCurrent, observedPeak, liveBufferCount, bufferCount, deviceLost, lastError, tracking, recentAllocations } = ledger;
+    return { requestedCurrent, observedPeak, liveBufferCount, bufferCount, deviceLost, lastError,
+      ...(tracking ? { tracking: { status: tracking.status, activeDeviceId: tracking.activeDeviceId, deviceCount: tracking.deviceCount } } : {}),
+      recentAllocationsOmitted: recentAllocations?.length ?? 0, positionRecord: true };
+  }
   async record(stage, details = {}) {
-    const storage = this.storage();
-    let gpuLedger = this.gpuLedger();
-    if (gpuLedger?.recentAllocations && SessionRangeLoader.SLIM_LEDGER_STAGES.has(stage)) {
-      const { recentAllocations, ...rest } = gpuLedger;
-      gpuLedger = { ...rest, recentAllocationsOmitted: recentAllocations.length };
+    const position = SessionRangeLoader.POSITION_STAGES.has(stage);
+    const metrics = this.sampleMetrics();
+    if (position) {
+      await this.checkpoint({ ...this.last, ...details, stage,
+        metrics: Object.fromEntries(SessionRangeLoader.POSITION_METRICS.map(key => [key, metrics[key]])),
+        gpuLedger: SessionRangeLoader.positionLedger(this.gpuLedger()) });
+      return;
     }
-    await this.checkpoint({ ...this.last, ...details, stage, metrics: this.sampleMetrics(), gpuLedger,
+    const storage = this.storage();
+    await this.checkpoint({ ...this.last, ...details, stage, metrics, gpuLedger: this.gpuLedger(),
       ...(storage ? { storage: { ...storage } } : {}) });
   }
   check() {

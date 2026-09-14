@@ -333,17 +333,23 @@ match no row are still kept in the export (`deviceReports`) with whether they fa
 the span of the runs.
 
 On iOS the acceptance path is the streamed one. Resident inference is diagnostic only: in
-three September 13 sessions every resident inference ended within a second of its first
-token at about 1,037 MiB requested, and the one with a same-minute Jetsam report was a
-`highwater` kill at 2,284 MiB of WebContent footprint. The evaluation page streams by
-default on iOS (`modelExecution=streamed` unless the URL says otherwise) and the experiment
-page defaults to streamed execution with a 30 s repeat delay. Streamed loads and probes have
-completed in every session with a 498 MiB peak request; the streamed cached-load repeat
-still needs the 30 s-delay comparison because two sessions ended a third rapid repeat at
-`ort-plan-start`.
+three September 13 sessions and the September 14 morning session every resident inference
+ended within a second of its first prompt at about 1,037 MiB requested (the last one before
+its first token), and the one with a same-minute Jetsam report was a `highwater` kill at
+2,284 MiB of WebContent footprint. The experiment page warns when that combination is
+selected on iOS. The evaluation page streams by default on iOS (`modelExecution=streamed`
+unless the URL says otherwise) and the experiment page defaults to streamed execution with
+a 30 s repeat delay. Streamed loads and probes have completed in every session with a
+522 MiB peak request. Two September 13 sessions ended a third rapid cached-load repeat at
+`ort-plan-start` with a 0 s delay; on September 14 with the 30 s delay all five streamed and
+all five resident repeats completed.
 
-Streamed throughput on the September 13 phone was about 1.5 tokens/s at 2 MiB staging
-(about 78 s per evaluation row, more than two hours per 100-row pass). The evaluation page
+Streamed throughput on the September 14 phone was about 2.0 tokens/s at 8 MiB staging with
+one output buffer (about 500 ms per token, 61 s per evaluation row, about 100 minutes per
+100-row pass; 1.5 tokens/s the night before at 2 MiB). This commit projects the output with
+two buffers so the next chunk's OPFS read overlaps the previous chunk's projection;
+`outputBuffers=1` on the evaluation URL or the experiment page keeps the serial path for
+comparison, and the phone measurement of the difference is still owed. The evaluation page
 accepts `rowLimit=N` to time a prefix of the rows; such a run is labelled a partial
 evaluation and is not acceptance. See docs/session-diagnostics.md.
 

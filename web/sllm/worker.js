@@ -12,6 +12,7 @@ import { prepareTokenizer, readPreparationFile, LOAD_ORDER } from './tokenizer-l
 import { disposeResources } from './cleanup.js';
 import { observeSession, observeInference } from './session-observation.js';
 import { bodyManifest, verifiedStreamedGraph, StreamedSession } from './streamed-model.js';
+import { DEFAULT_OUTPUT_BUFFERS } from './streamed-weights.js';
 import { opfsResidentProbe, runtimeProbe } from './experiments/probes.js';
 
 import { makeRouge1 } from './rouge.js';
@@ -63,7 +64,7 @@ env.fetch = (input, init) => {
 // Files are verified on disk before ORT receives small range-source descriptors.
 let weightStore, journal, loadController, trackedGpu, sessionMetrics;
 let operation = null, queuedRun = null, preparationAttempted = false;
-let modelExecution = 'resident', streamedSession = null;
+let modelExecution = 'resident', streamedSession = null, streamedOutputBuffers = DEFAULT_OUTPUT_BUFFERS;
 let pendingStreamedSessions = [];
 let releaseModelLease;
 const trace = new URL(self.location.href).searchParams.get('trace') === '1';
@@ -186,7 +187,8 @@ async function loadEvaluationInputs() {
   if (tokenizer) rouge1 = makeRouge1(tokenizer);
 }
 
-async function load({ device: preferred, stagingMiB = 8, environment = {} }, sessionOnly = false) {
+async function load({ device: preferred, stagingMiB = 8, outputBuffers, environment = {} }, sessionOnly = false) {
+  streamedOutputBuffers = [1, 2].includes(outputBuffers) ? outputBuffers : DEFAULT_OUTPUT_BUFFERS;
   const loadStarted = performance.now(), timings = {};
   if (preferred !== 'webgpu') throw new Error('이 FP32 메모리 실험은 WebGPU가 필요합니다.');
   env.useBrowserCache = true;   // 작은 모델 설정만 라이브러리 캐시 사용. 토크나이저는 릴리스 URL, 가중치는 OPFS.
@@ -346,7 +348,7 @@ async function loadStreamedSession(timings, loadOrder, stagingMiB = 8) {
   timings.graphPreparationMs = performance.now() - started;
   await journal.checkpoint({ stage: 'graph-verified', modelExecution, graphSha256: manifest.graphSha256,
     sourceGraphSha256: source.graphSha256, expectedInitializerCount: manifest.initializers.filter(x => x.location).length,
-    expectedGpuResidentBytes: descriptor.bodyWeightBytes + descriptor.chunkBytes });
+    outputBuffers: streamedOutputBuffers, expectedGpuResidentBytes: descriptor.bodyWeightBytes + descriptor.chunkBytes * streamedOutputBuffers });
   const preparationStarted = performance.now();
   // Open against the original manifest: existing verified OPFS weights remain usable.
   const externalData = await mountWeights(source);
@@ -356,7 +358,7 @@ async function loadStreamedSession(timings, loadOrder, stagingMiB = 8) {
   }, { context: () => gpuOperationContext(journal.state.last) });
   const options = { executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled', enableCpuMemArena: false, enableMemPattern: false };
   await journal.checkpoint({ stage: 'session-create', modelExecution, loadOrder, tokenizerPrepared: !!tokenizer,
-    stagingMiB, timings: { ...timings }, storage: { ...weightStore.metrics } });
+    stagingMiB, outputBuffers: streamedOutputBuffers, timings: { ...timings }, storage: { ...weightStore.metrics } });
   const modelStarted = performance.now();
   // The head has dynamic weights and no external initializers. Create it once.
   // WASM initializes during this first session, so the bridge hands the heap
@@ -382,7 +384,7 @@ async function loadStreamedSession(timings, loadOrder, stagingMiB = 8) {
     if (!generationResponse.ok) throw new Error('Generation config missing');
     streamedSession = new StreamedSession({ ort, body, head, descriptor, store: weightStore, manifest: source,
       tracker: trackedGpu, signal: loadController.signal, checkpoint: record => journal.checkpoint(record),
-      scratchBytes: Math.min(stagingMiB * 2**20, descriptor.chunkBytes) });
+      scratchBytes: Math.min(stagingMiB * 2**20, descriptor.chunkBytes), outputBuffers: streamedOutputBuffers });
     model = new Gemma3ForCausalLM(config, { model: streamedSession }, { generation_config: await generationResponse.json() });
     pendingStreamedSessions = [];
     await trackedGpu.flush();
@@ -395,7 +397,7 @@ async function loadStreamedSession(timings, loadOrder, stagingMiB = 8) {
     weightStore.closeActive();
     sessionMetrics = { stage: success ? 'session-create-complete' : 'session-create-failed', modelExecution,
       loadOrder, tokenizer: tokenizerResult, tokenizerPrepared: !!tokenizer, modelSessionCreated: success,
-      runtimeMode, stagingMiB, durationMs: performance.now() - started, metrics, timings: { ...timings },
+      runtimeMode, stagingMiB, outputBuffers: streamedOutputBuffers, durationMs: performance.now() - started, metrics, timings: { ...timings },
       streaming: streamedSession ? { ...streamedSession.weights.metrics } : null,
       gpuLedger: { ...trackedGpu.ledger }, storage: { ...weightStore.metrics } };
     await journal.checkpoint(sessionMetrics);
@@ -572,8 +574,12 @@ async function runRow(row) {
 // ── 전체 평가 ───────────────────────────────────────────────────────────────
 // `rowLimit` runs a prefix of the 100 rows for throughput checks on the phone.
 // A partial run is recorded as such and never counts as evaluation acceptance.
+// A cancelled evaluation is always the tester's stop: the worker only sets
+// `aborted` on the page's stop message. The summary says so and keeps the row
+// count, so an export separates a stop from a page that went away.
+const stopped = (completedRows, plan = {}) => ({ stopSource: 'user-stop', completedRows, ...plan });
 async function runAll(rowLimit = null) {
-  if (aborted) { await journal.finish('cancelled', { completedRows: 0 }); post({ type: 'aborted', at: 0 }); return; }
+  if (aborted) { await journal.finish('cancelled', stopped(0)); post({ type: 'aborted', at: 0 }); return; }
   const limited = Number.isInteger(rowLimit) && rowLimit > 0 && rowLimit < rows.length;
   const evaluationRows = limited ? rows.slice(0, rowLimit) : rows;
   const plan = { rows: evaluationRows.length, totalRows: rows.length, rowLimit: limited ? rowLimit : null };
@@ -605,13 +611,13 @@ async function runRows(rows, plan) {
   const wall = performance.now();
   const done = [];
   for (let i = 0; i < rows.length; ++i) {
-    if (aborted) { await journal.finish('cancelled', { completedRows: i, ...plan }); post({ type: 'aborted', at: i }); return; }
+    if (aborted) { await journal.finish('cancelled', stopped(i, plan)); post({ type: 'aborted', at: i }); return; }
     post({ type: 'phase', text: `평가 중… ${i + 1}/${rows.length}` });
     await recordMemory('row-start', { row: i + 1 });
     const t0 = performance.now();
     try {
       const r = await runRow({ ...rows[i], index: i + 1 });
-      if (aborted) { await journal.finish('cancelled', { completedRows: i, ...plan }); post({ type: 'aborted', at: i }); return; }
+      if (aborted) { await journal.finish('cancelled', stopped(i, plan)); post({ type: 'aborted', at: i }); return; }
       done.push(r);
       await recordMemory('row-complete', { row: i + 1, promptLen: r.promptLen, nTok: r.nTok,
         result: { ttft: r.ttft, totalMs: r.total, tps: r.tps, eos: r.eos, rouge: r.rouge } });
@@ -632,7 +638,7 @@ async function runRows(rows, plan) {
       throw e;
     }
   }
-  if (aborted) { await journal.finish('cancelled', { completedRows: rows.length, ...plan }); post({ type: 'aborted', at: rows.length }); return; }
+  if (aborted) { await journal.finish('cancelled', stopped(rows.length, plan)); post({ type: 'aborted', at: rows.length }); return; }
 
   // done.length === rows.length. 512 상한에 걸린 행도 포함한 전체 평균.
   const avg = (f) => done.reduce((s, r) => s + f(r), 0) / done.length;
@@ -694,7 +700,7 @@ async function runProbe(maxNewTokens = 32, sampled = false) {
     await recordMemory('probe-inference-complete', { row: index + 1, sampled: true });
   }
   const result = { success: !aborted, outputs, sampledOutput, gpuLedger: { ...trackedGpu.ledger }, sessionMetrics };
-  await journal.finish(aborted ? 'cancelled' : 'complete', result);
+  await journal.finish(aborted ? 'cancelled' : 'complete', aborted ? { ...result, stopSource: 'user-stop' } : result);
   post({ type: 'probe-result', result });
 }
 
@@ -724,6 +730,8 @@ self.onmessage = async ({ data }) => {
   journal = new RunDiagnostics(data.runId || newRunId(), { ...data.environment, userAgent: navigator.userAgent,
     runtimeMode: resident ? null : runtimeMode, ortJavaScriptMode: runtimeMode, ortJavaScriptLoaded: true, loadOrder, tokenizerFormat, modelExecution,
     stagingMiB: operation === 'tokenizer' ? null : preparationOperations.has(operation) ? data.stagingMiB ?? 8 : sessionMetrics?.stagingMiB ?? 8,
+    outputBuffers: modelExecution !== 'streamed' || operation === 'tokenizer' ? null
+      : preparationOperations.has(operation) ? ([1, 2].includes(data.outputBuffers) ? data.outputBuffers : DEFAULT_OUTPUT_BUFFERS) : streamedOutputBuffers,
     diagnosticsMode: data.environment?.diagnosticsMode || new URL(self.location.href).searchParams.get('diagnosticsMode') || 'compact',
     workerURL: self.location.href });
   try {
@@ -765,12 +773,18 @@ self.onmessage = async ({ data }) => {
     const inference = lastInference; lastInference = null;
     const observedDuring = journal.state.last?.stage;
     const wasmFailure = cancelled ? null : await wasmFailureEvidence(err);
+    // An evaluation stopped inside a generate() call ends here with an AbortError;
+    // the rows it finished are in the journal's `rows`.
+    const completedRows = operation === 'run' ? journal.state.rows.length : null;
     await journal.finish(cancelled ? 'cancelled' : 'failed', { error: errorText(err), sessionMetrics,
       tokenizer: tokenizerResult, observedDuring, ...(wasmFailure ? { ortWasmInstantiated: false, wasmFailure } : {}),
+      ...(cancelled ? { stopSource: 'user-stop' } : {}), ...(completedRows == null ? {} : { completedRows }),
       ...(inference ? { inference } : {}) });
     await cleanupWorker();
     // A failed create/generate is terminal; cleanup does not authorize reuse.
-    post({ type: 'fatal', cancelled, error: cancelled ? '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.' : errorText(err) });
+    post({ type: 'fatal', cancelled, completedRows,
+      error: cancelled ? (operation === 'run' ? `평가를 정지했습니다 (${completedRows}행 완료). 페이지를 새로 열어 다시 시작해 주세요.`
+        : '모델 준비를 중단했습니다. 페이지를 새로 열어 다시 시작해 주세요.') : errorText(err) });
   } finally {
     if (modelExecution === 'streamed' && model) weightStore?.closeActive();
     else weightStore?.close();

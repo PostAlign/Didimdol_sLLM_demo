@@ -33,13 +33,13 @@ export async function verifiedStreamedGraph(descriptor, name, baseURL) {
 /** ORT session facade: preserves Transformers' generation/cache/sampling machinery. */
 export class StreamedSession {
   constructor({ ort, body, head, descriptor, store, manifest, tracker, signal, checkpoint = async () => {}, scratchBytes,
-    stepCheckpointEvery = 1 }) {
+    outputBuffers, stepCheckpointEvery = 1 }) {
     Object.assign(this, { ort, body, head, descriptor, checkpoint });
     // Durable `streamed-step-complete` records are written every N projections.
     // Inference samples already carry the streaming totals every few seconds, so
     // a 100-row evaluation does not need one IndexedDB transaction per token.
     this.stepCheckpointEvery = stepCheckpointEvery;
-    this.weights = new StreamedWeights({ ort, device: tracker.device, tracker, store, manifest, descriptor, signal, scratchBytes });
+    this.weights = new StreamedWeights({ ort, device: tracker.device, tracker, store, manifest, descriptor, signal, scratchBytes, outputBuffers });
     this.inputNames = [...new Set(['input_ids', ...body.inputNames.filter(name => name !== 'streamed_embeddings')])];
     this.inputMetadata = this.inputNames.map(name => body.inputMetadata.find(value => value.name === name) ||
       { name, type: 'int64', shape: ['batch_size', 'sequence_length'], isTensor: true });
@@ -60,20 +60,42 @@ export class StreamedSession {
       this.weights.check();
       const hidden = outputs[this.descriptor.hiddenOutput];
       const logits = new Float32Array(this.descriptor.vocabSize);
-      for (let i = 0; i < this.descriptor.chunks.length; i++) {
-        await this.weights.upload(i);
+      const chunks = this.descriptor.chunks.length, overlap = this.weights.buffers.length > 1;
+      const projectionStart = performance.now();
+      await this.weights.upload(0);
+      for (let i = 0; i < chunks; i++) {
         this.weights.check();
-        this.weights.position = { operation: 'output-compute', chunk: i };
+        const slot = this.weights.slot(i);
+        this.weights.computing = { chunk: i, slot };
+        this.weights.position = { operation: 'output-compute', chunk: i, slot };
         const computeStart = performance.now();
-        const result = await this.head.run({ hidden, weight: this.weights.tensor });
+        const pending = this.head.run({ hidden, weight: this.weights.tensors[slot] });
+        // With two buffers the next chunk is read from OPFS and queued into the
+        // other buffer while this projection runs on the GPU. The macrotask
+        // yield lets the runtime submit its dispatch before the synchronous
+        // OPFS reads occupy the thread. That buffer's previous projection has
+        // already been read back below, so the rewrite cannot overtake it.
+        const next = i + 1 < chunks && overlap
+          ? new Promise(resolve => setTimeout(resolve, 0)).then(() => this.weights.upload(i + 1)).then(() => null, error => error) : null;
+        let result, failure;
         try {
+          result = await pending;
           const values = await result.chunk_logits.getData();
           logits.set(values, i * this.descriptor.chunkRows);
-          // No overwrite of the shared weight buffer before this projection finishes.
-          await this.weights.device.queue.onSubmittedWorkDone();
-        } finally { result.chunk_logits.dispose(); }
+          // One buffer: no overwrite of the shared weight buffer before this projection finishes.
+          if (!overlap) await this.weights.device.queue.onSubmittedWorkDone();
+        } catch (error) { failure = error; }
+        finally { result?.chunk_logits.dispose(); }
         this.weights.metrics.outputComputeMs += performance.now() - computeStart;
+        // The in-flight upload is always settled before this call fails or
+        // proceeds, so disposal never races a read into the scratch.
+        const uploadFailure = next ? await next : null;
+        if (failure) throw failure;
+        if (uploadFailure) throw uploadFailure;
+        if (!next && i + 1 < chunks) await this.weights.upload(i + 1);
       }
+      this.weights.computing = null;
+      this.weights.metrics.projectionMs += performance.now() - projectionStart;
       this.weights.check();
       this.weights.metrics.projections++;
       const every = Math.max(1, Math.floor(this.stepCheckpointEvery) || 1);
@@ -87,7 +109,7 @@ export class StreamedSession {
       return outputs;
     } catch (error) {
       await this.checkpoint({ stage: 'streamed-error', message: String(error), position: this.weights.position,
-        streaming: { ...this.weights.metrics } });
+        computing: this.weights.computing ?? null, streaming: { ...this.weights.metrics } });
       throw error;
     } finally {
       embeddings?.dispose();

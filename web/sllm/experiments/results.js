@@ -57,6 +57,8 @@ export function executionEvidence(result, run = null) {
   }
   return { runtimeMode: isResident(kind) ? null : environment.runtimeMode ?? result.mode ?? null,
     modelExecution: environment.modelExecution ?? summary.modelExecution ?? result.modelExecution ?? null,
+    // Output buffers of the streamed projection (2 overlap reads with compute, 1 is the serial comparison); null before this field existed.
+    outputBuffers: environment.outputBuffers ?? summary.outputBuffers ?? summary.sessionMetrics?.outputBuffers ?? result.outputBuffers ?? null,
     streaming: [run?.last, ...(run?.records || []).slice().reverse()].find(record => record?.streaming)?.streaming ?? summary.streaming ?? null,
     loadOrder: environment.loadOrder ?? summary.tokenizer?.loadOrder ?? null,
     tokenizerBuild: environment.build?.tokenizer ?? summary.tokenizer?.tokenizerBuild ?? null,

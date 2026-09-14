@@ -14,17 +14,22 @@ GPU 가중치 상주량을 줄이는 비교 경로다. iPhone에서 크래시 �
 | 구성 | 가중치 요청량 |
 | --- | ---: |
 | 본체 외부 initializer 235개 | 401,304,064 B (382.713 MiB) |
-| 재사용 출력 가중치 GPUBuffer 1개 | 41,943,040 B (40 MiB) |
-| 합계 | 443,247,104 B (422.713 MiB) |
+| 재사용 출력 가중치 GPUBuffer 2개 (기본, `outputBuffers=2`) | 83,886,080 B (80 MiB) |
+| 합계 | 485,190,144 B (462.713 MiB) |
 
-CPU 전송 scratch는 2 MiB로 고정된다. 입력 임베딩은 토큰당 2,560 B를 OPFS에서
-직접 읽어 프롬프트 크기의 배열에 넣는다. 본체 그래프가 기존 임베딩 배율, attention,
-위치 계산, 정규화, 마지막 위치 선택과 KV 출력을 수행한다.
+`outputBuffers=1`이면 버퍼 하나(40 MiB, 합계 422.713 MiB)로 9월 13일과 같은 직렬
+경로가 된다. CPU 전송 scratch는 전송 크기(기본 8 MiB)를 따른다. 입력 임베딩은
+토큰당 2,560 B를 OPFS에서 직접 읽어 프롬프트 크기의 배열에 넣는다. 본체 그래프가
+기존 임베딩 배율, attention, 위치 계산, 정규화, 마지막 위치 선택과 KV 출력을 수행한다.
 
 출력층은 동적 `weight` 입력을 받는 FP32 `Gemm(transB=1)` 세션이다. 16개 청크를
-같은 GPU 버퍼에 순차적으로 채우고 계산 결과를 전체 어휘 logits에 복사한다.
-전송 완료와 projection 완료를 기다린 뒤 버퍼를 덮어쓴다. 본체와 출력 세션은 같은
-ORT 런타임과 GPUDevice를 사용하며 세션을 토큰/청크마다 다시 만들지 않는다.
+두 GPU 버퍼에 번갈아 채우고 계산 결과를 전체 어휘 logits에 복사한다. 청크 *i*의
+projection을 띄운 뒤 결과를 기다리는 동안 청크 *i+1*을 다른 버퍼로 읽어 올린다.
+한 버퍼는 앞선 projection의 결과를 회수한 뒤에만 다시 쓴다. 버퍼가 하나면 전송
+완료와 projection 완료를 기다린 뒤 덮어쓴다. `writeBuffer`마다 오류 스코프를
+동기적으로 감싸는데, 업로드가 런타임의 `run()`과 같은 장치에서 겹치기 때문이다.
+본체와 출력 세션은 같은 ORT 런타임과 GPUDevice를 사용하며 세션을 토큰/청크마다
+다시 만들지 않는다.
 
 한 번의 모델 forward마다 출력 가중치 640 MiB를 다시 읽고 업로드한다. 읽기는 로컬
 OPFS이며 네트워크 재다운로드가 아니다. 생성 속도와 평가 총시간은 기존 방식보다
@@ -73,9 +78,12 @@ generate, sampling, EOS, cache 처리를 재사용한다. 기존 평가의 seed 
 251개와 순차 로딩 본체의 235개는 서로 다른 범위다.
 
 `modelExecution`, `streaming`을 결과에 기록하고 `streamed-weight` GPU 역할을 추가한다.
-`streaming`에는 임베딩/출력 읽기 바이트, 업로드 바이트, 버퍼 크기, projection 수,
-읽기·전송을 합한 uploadMs와 출력 계산/결과 회수 시간이 있다. 토큰별 완료 시
-누적 집계만 저장하며 오류에는 마지막 청크·오프셋을 기록한다. 기존 세션 가중치
+`streaming`에는 임베딩/출력 읽기 바이트, 업로드 바이트, 버퍼 크기와 개수, projection 수,
+읽기·전송·큐 대기를 합한 uploadMs(outputReadMs, queueWaitMs로 분리), 출력 계산/결과
+회수 시간 outputComputeMs, 출력 루프 전체의 벽시계 시간 projectionMs가 있다. 두 버퍼에서는
+uploadMs와 outputComputeMs가 겹치므로 `uploadMs + outputComputeMs − projectionMs`가
+겹침으로 줄어든 시간이다. 토큰별 완료 시 누적 집계만 저장하며 오류에는 업로드 중이던
+청크·오프셋(`position`)과 계산 중이던 청크(`computing`)를 기록한다. 기존 세션 가중치
 카운터는 본체만 센다. 전체 요청량은 GPU ledger에서 확인한다.
 
 ## 검증

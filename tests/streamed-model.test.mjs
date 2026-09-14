@@ -70,40 +70,69 @@ test('completed exports retain measured inference streaming totals rather than p
   assert.deepEqual(executionEvidence({ kind: 'probe', success: true }, run).streaming, streaming);
 });
 
-test('output uploads reuse one GPU buffer, wait once per chunk and stop after cancelled reads', async () => {
+test('output uploads alternate two GPU buffers, wait once per chunk and stop after cancelled reads', async () => {
   const originalUsage = globalThis.GPUBufferUsage;
   globalThis.GPUBufferUsage = { STORAGE: 128, COPY_DST: 8 };
-  let created = 0, destroyed = 0, writes = 0, pending = 0, reads = 0, waits = 0, maxPending = 0;
+  let created = 0, destroyed = 0, writes = 0, pending = 0, reads = 0, waits = 0, maxPending = 0, scopes = 0, maxScopes = 0;
   const controller = new AbortController();
+  const buffers = [], written = [];
   const device = {
-    createBuffer() { created++; return { destroy() { destroyed++; } }; },
-    pushErrorScope() {}, async popErrorScope() { return null; },
+    createBuffer() { created++; const buffer = { id: created, destroy() { destroyed++; } }; buffers.push(buffer); return buffer; },
+    pushErrorScope() { scopes++; maxScopes = Math.max(maxScopes, scopes); },
+    async popErrorScope() { scopes--; return null; },
     queue: { writeBuffer(buffer, offset, data) {
+      assert.equal(scopes, 2, 'both scopes bracket the write itself');
       assert.ok(data.length <= 8 * 2**20); assert.equal(offset, (writes % 5) * 8 * 2**20); writes++; pending++;
+      written.push(buffer.id);
       maxPending = Math.max(maxPending, pending);
-    }, async onSubmittedWorkDone() { waits++; pending = 0; } },
+    }, async onSubmittedWorkDone() { assert.equal(scopes, 0, 'no scope is held across the queue wait'); waits++; pending = 0; } },
   };
-  const ort = { Tensor: { fromGpuBuffer() { return { dispose() {} }; } } };
-  const store = { async readRangeInto(file, offset, size) { assert.ok(size <= 8 * 2**20); reads++; } };
+  const ort = { Tensor: { fromGpuBuffer(buffer) { return { buffer, dispose() {} }; } } };
+  const store = { async readRangeInto(file, offset, size) { assert.equal(scopes, 0, 'no scope is held across a disk read'); assert.ok(size <= 8 * 2**20); reads++; } };
   let weights;
   try {
     weights = new StreamedWeights({ ort, device, tracker: { ledger: {}, observeBuffer() {} }, store,
       manifest: source, descriptor, signal: controller.signal });
     assert.equal(weights.metrics.cpuScratchBytes, 8 * 2**20, 'the default scratch is the 8 MiB staging size');
-    await weights.upload(0); await weights.upload(1);
-    assert.equal(created, 1); assert.equal(reads, 10); assert.equal(writes, 10);
-    assert.equal(waits, 2, 'one queue wait per chunk, not per staging piece');
+    assert.equal(created, 2, 'two output buffers by default');
+    assert.equal(weights.metrics.gpuBufferBytes, 80 * 2**20); assert.equal(weights.metrics.gpuBufferCount, 2);
+    assert.deepEqual([weights.slot(0), weights.slot(1), weights.slot(2), weights.slot(15)], [0, 1, 0, 1]);
+    assert.equal(weights.tensors[1].buffer, buffers[1]);
+    await weights.upload(0); await weights.upload(1); await weights.upload(2);
+    assert.equal(reads, 15); assert.equal(writes, 15);
+    assert.deepEqual(written, [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1], 'chunks alternate between the two buffers');
+    assert.equal(waits, 3, 'one queue wait per chunk, not per staging piece');
     assert.equal(maxPending, 5, 'a whole chunk of writes is queued before the wait');
-    assert.equal(weights.metrics.uploadedBytes, 80 * 2**20);
-    assert.equal(weights.metrics.readCalls, 10); assert.equal(weights.metrics.writeCalls, 10); assert.equal(weights.metrics.queueWaits, 2);
+    assert.equal(maxScopes, 2, 'scopes never nest beyond one write');
+    assert.equal(weights.metrics.uploadedBytes, 120 * 2**20);
+    assert.equal(weights.metrics.readCalls, 15); assert.equal(weights.metrics.writeCalls, 15); assert.equal(weights.metrics.queueWaits, 3);
     assert.ok(weights.metrics.outputReadMs <= weights.metrics.uploadMs);
     store.readRangeInto = async () => controller.abort();
-    await assert.rejects(weights.upload(2), /abort/i);
-    assert.equal(writes, 10, 'cancel during disk read must not enqueue another upload');
-    assert.equal(weights.metrics.uploadedBytes, 80 * 2**20, 'an interrupted chunk is not counted as uploaded');
+    await assert.rejects(weights.upload(3), /abort/i);
+    assert.equal(writes, 15, 'cancel during disk read must not enqueue another upload');
+    assert.equal(weights.metrics.uploadedBytes, 120 * 2**20, 'an interrupted chunk is not counted as uploaded');
     weights.dispose(); weights.dispose();
-    assert.equal(destroyed, 1);
+    assert.equal(destroyed, 2);
   } finally { weights?.dispose(); globalThis.GPUBufferUsage = originalUsage; }
+});
+
+test('one output buffer is the serial comparison and other counts are refused', () => {
+  const originalUsage = globalThis.GPUBufferUsage;
+  globalThis.GPUBufferUsage = { STORAGE: 128, COPY_DST: 8 };
+  let created = 0;
+  const device = { createBuffer() { created++; return { destroy() {} }; } };
+  const ort = { Tensor: { fromGpuBuffer() { return { dispose() {} }; } } };
+  const tracker = { ledger: {}, observeBuffer() {} };
+  try {
+    const single = new StreamedWeights({ ort, device, tracker, store: {}, manifest: source, descriptor, outputBuffers: 1 });
+    assert.equal(created, 1);
+    assert.equal(single.metrics.gpuBufferBytes, 40 * 2**20); assert.equal(single.metrics.gpuBufferCount, 1);
+    assert.deepEqual([single.slot(0), single.slot(1), single.slot(15)], [0, 0, 0]);
+    single.dispose();
+    for (const outputBuffers of [0, 3, '2', null]) {
+      assert.throws(() => new StreamedWeights({ ort, device, tracker, store: {}, manifest: source, descriptor, outputBuffers }), RangeError, String(outputBuffers));
+    }
+  } finally { globalThis.GPUBufferUsage = originalUsage; }
 });
 
 test('the streamed scratch follows the staging size and refuses sizes a chunk cannot hold', async () => {
@@ -116,7 +145,7 @@ test('the streamed scratch follows the staging size and refuses sizes a chunk ca
   const store = { async readRangeInto() { reads++; } };
   const tracker = { ledger: {}, observeBuffer() {} };
   try {
-    const small = new StreamedWeights({ ort, device, tracker, store, manifest: source, descriptor, scratchBytes: 2 * 2**20 });
+    const small = new StreamedWeights({ ort, device, tracker, store, manifest: source, descriptor, scratchBytes: 2 * 2**20, outputBuffers: 1 });
     await small.upload(0);
     assert.equal(reads, 20); assert.equal(waits, 1);
     assert.equal(small.metrics.cpuScratchBytes, 2 * 2**20);
@@ -129,12 +158,13 @@ test('the streamed scratch follows the staging size and refuses sizes a chunk ca
 
 test('a disk error remains the primary failure while both GPU error scopes are drained', async () => {
   const diskError = new Error('disk read failed');
-  let popped = 0;
+  let popped = 0, reads = 0;
   const weights = Object.assign(Object.create(StreamedWeights.prototype), {
     check() {}, descriptor, scratch: new Uint8Array(16), files: new Map(source.files.map(x => [x.location, x])),
-    metrics: { outputReadBytes: 0, outputReadMs: 0, readCalls: 0 }, store: { async readRangeInto() { throw diskError; } },
-    device: { pushErrorScope() {}, async popErrorScope() { popped++; throw new Error('device lost'); } },
+    buffers: [{}], metrics: { outputReadBytes: 0, outputReadMs: 0, readCalls: 0, writeCalls: 0 },
+    store: { async readRangeInto() { if (reads++) throw diskError; } },
+    device: { pushErrorScope() {}, async popErrorScope() { popped++; throw new Error('device lost'); }, queue: { writeBuffer() {} } },
   });
   await assert.rejects(weights.upload(0), error => error === diskError);
-  assert.equal(popped, 2);
+  assert.equal(popped, 2, 'the scopes of the one completed write are drained');
 });

@@ -1,25 +1,37 @@
-/** OPFS-backed FP32 embedding lookup and one reusable output-weight GPU buffer. */
+/** OPFS-backed FP32 embedding lookup and reusable output-weight GPU buffers. */
 export const DEFAULT_SCRATCH_BYTES = 8 * 2**20;
+// Two output buffers let the next chunk's OPFS read and writeBuffer run while
+// the GPU projects the current chunk. One buffer serializes them (comparison).
+export const DEFAULT_OUTPUT_BUFFERS = 2;
 export class StreamedWeights {
-  constructor({ ort, device, tracker, store, manifest, descriptor, signal, scratchBytes = DEFAULT_SCRATCH_BYTES }) {
+  constructor({ ort, device, tracker, store, manifest, descriptor, signal, scratchBytes = DEFAULT_SCRATCH_BYTES,
+    outputBuffers = DEFAULT_OUTPUT_BUFFERS }) {
     Object.assign(this, { ort, device, tracker, store, descriptor, signal });
     this.check();
     if (!Number.isInteger(scratchBytes) || scratchBytes < 4 || scratchBytes % 4 || scratchBytes > descriptor.chunkBytes) {
       throw new RangeError('Streamed scratch must be a multiple of four bytes no larger than one chunk');
     }
+    if (![1, 2].includes(outputBuffers)) throw new RangeError('Streamed output buffers must be 1 or 2');
     this.files = new Map(manifest.files.map(file => [file.location, file]));
     this.scratch = new Uint8Array(scratchBytes);
-    this.buffer = device.createBuffer({ size: descriptor.chunkBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    tracker.observeBuffer(device, this.buffer, 'streamed-weight');
-    this.tensor = ort.Tensor.fromGpuBuffer(this.buffer, { dataType: 'float32', dims: [descriptor.chunkRows, descriptor.hiddenSize] });
+    this.buffers = Array.from({ length: outputBuffers }, () => device.createBuffer({ size: descriptor.chunkBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+    for (const buffer of this.buffers) tracker.observeBuffer(device, buffer, 'streamed-weight');
+    this.tensors = this.buffers.map(buffer => ort.Tensor.fromGpuBuffer(buffer, { dataType: 'float32', dims: [descriptor.chunkRows, descriptor.hiddenSize] }));
     // `uploadMs` covers reading, writing and the queue wait of every chunk;
     // `outputReadMs` is the OPFS share of it, `queueWaitMs` the wait share.
-    this.metrics = { gpuBufferBytes: descriptor.chunkBytes, cpuScratchBytes: this.scratch.byteLength,
+    // With two buffers uploads overlap projections, so `uploadMs` and
+    // `outputComputeMs` add up to more than `projectionMs`, the wall time of
+    // the output loop; the difference is the time the overlap saved.
+    this.metrics = { gpuBufferBytes: descriptor.chunkBytes * outputBuffers, gpuBufferCount: outputBuffers,
+      cpuScratchBytes: this.scratch.byteLength,
       embeddingReadBytes: 0, outputReadBytes: 0, uploadedBytes: 0, embeddingMs: 0,
-      uploadMs: 0, outputReadMs: 0, queueWaitMs: 0, outputComputeMs: 0, projections: 0, chunks: 0,
+      uploadMs: 0, outputReadMs: 0, queueWaitMs: 0, outputComputeMs: 0, projectionMs: 0, projections: 0, chunks: 0,
       readCalls: 0, writeCalls: 0, queueWaits: 0 };
   }
+  get buffer() { return this.buffers[0]; }
+  get tensor() { return this.tensors[0]; }
+  slot(index) { return index % this.buffers.length; }
   check() {
     this.signal?.throwIfAborted();
     if (this.disposed) throw new Error('Streamed weights disposed');
@@ -47,24 +59,30 @@ export class StreamedWeights {
     return new this.ort.Tensor('float32', output, [1, values.length, hiddenSize]);
   }
   /**
-   * One output chunk: read scratch-sized pieces from OPFS and queue each write
-   * immediately. `writeBuffer` copies the data synchronously, so the scratch can
-   * be refilled while the queue works; one queue wait per chunk then bounds the
-   * driver backlog. The September 13 phone paid a queue wait per 2 MiB piece,
-   * which was 320 waits and 320 reads per generated token.
+   * One output chunk into the buffer of its slot: read scratch-sized pieces
+   * from OPFS and queue each write immediately. `writeBuffer` copies the data
+   * synchronously, so the scratch can be refilled while the queue works; one
+   * queue wait per chunk then bounds the driver backlog. The September 13 phone
+   * paid a queue wait per 2 MiB piece, which was 320 waits and 320 reads per
+   * generated token.
+   *
+   * Error scopes bracket each `writeBuffer` call synchronously. An upload may
+   * run while the head session's `run()` is pending on the same device, and a
+   * scope held across an `await` could cross one the runtime pushes and pops
+   * around its own dispatches.
    */
   async upload(index) {
     this.check();
     const chunk = this.descriptor.chunks[index];
+    const buffer = this.buffers[this.slot(index)];
     const start = performance.now();
-    this.device.pushErrorScope('out-of-memory');
-    this.device.pushErrorScope('validation');
     let failure, written = 0;
+    const scopes = [];
     try {
       for (let offset = 0; offset < chunk.bytes; offset += this.scratch.length) {
         this.check();
         const size = Math.min(this.scratch.length, chunk.bytes - offset), data = this.scratch.subarray(0, size);
-        this.position = { operation: 'output-read', chunk: index, offset, location: chunk.location };
+        this.position = { operation: 'output-read', chunk: index, slot: this.slot(index), offset, location: chunk.location };
         const readStart = performance.now();
         await this.store.readRangeInto(this.files.get(chunk.location), chunk.offset + offset, size, data);
         this.metrics.outputReadMs += performance.now() - readStart;
@@ -72,11 +90,14 @@ export class StreamedWeights {
         this.metrics.readCalls++;
         this.check();
         this.position.operation = 'output-upload';
-        this.device.queue.writeBuffer(this.buffer, offset, data);
+        this.device.pushErrorScope('out-of-memory');
+        this.device.pushErrorScope('validation');
+        try { this.device.queue.writeBuffer(buffer, offset, data); }
+        finally { scopes.push(this.device.popErrorScope(), this.device.popErrorScope()); }
         this.metrics.writeCalls++;
         written += size;
       }
-      this.position = { operation: 'output-upload-wait', chunk: index, offset: written, location: chunk.location };
+      this.position = { operation: 'output-upload-wait', chunk: index, slot: this.slot(index), offset: written, location: chunk.location };
       const waitStart = performance.now();
       await this.device.queue.onSubmittedWorkDone();
       this.metrics.queueWaitMs += performance.now() - waitStart;
@@ -84,9 +105,9 @@ export class StreamedWeights {
       this.metrics.uploadedBytes += written;
     } catch (error) { failure = error; }
     finally {
-      for (let i = 0; i < 2; i++) {
+      for (const scope of scopes) {
         try {
-          const error = await this.device.popErrorScope();
+          const error = await scope;
           if (error) failure ||= new Error(`Streamed upload: ${error.message}`);
         } catch (error) { failure ||= error; }
       }
@@ -98,7 +119,9 @@ export class StreamedWeights {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.tensor.dispose(); this.buffer.destroy(); this.scratch = null;
+    for (const tensor of this.tensors) tensor.dispose();
+    for (const buffer of this.buffers) buffer.destroy();
+    this.scratch = null;
     this.metrics.gpuBufferBytes = 0; this.metrics.cpuScratchBytes = 0;
   }
 }

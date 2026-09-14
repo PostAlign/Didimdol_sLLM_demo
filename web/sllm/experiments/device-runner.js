@@ -1,4 +1,4 @@
-import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel, pageNavigationType, unloadLabel, localTimestamp, deviceClock } from '../diagnostics.js';
+import { newRunId, readRun, saveCheckpoint, runKey, recordRecovery, buildIdentity, diagnosticSummary, trackingLabel, pageNavigationType, unloadLabel, stopLabel, localTimestamp, deviceClock } from '../diagnostics.js';
 import { runtimeRelease } from '../ort-runtime.js';
 import { isResident, isSimpleProbe, canRepeat, applicationOperation, executionSettings, executionEvidence, scopeLabel, seriesSummary, describeDevice, runContext, parseDeviceLogNote } from './results.js';
 import { loadExperimentState, saveExperimentState, MAX_RESULTS } from './state-store.js';
@@ -14,10 +14,12 @@ let worker, sessionResult, evaluationCount = 0, finishing = false, repeatWait = 
 // cached load twice ended at `ort-plan-start`. Stored choices still win.
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 const IOS_DEFAULTS = { modelExecution: 'streamed', repeatDelay: 30 };
-const controlIds = ['device', 'mode', 'staging', 'repeats', 'repeatDelay', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
+const controlIds = ['device', 'mode', 'staging', 'outputBuffers', 'repeats', 'repeatDelay', 'inspector', 'kind', 'diagnosticsMode', 'tokenizerFormat', 'sessionIdle', 'modelExecution'];
+const streamedKinds = ['session-only', 'load', 'warm-load', 'probe', 'evaluation'];
 // Exports without OS/browser versions cannot be compared; the model name is still typed by hand.
 $('device').value = state.device || describeDevice(navigator.userAgent); $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
+$('outputBuffers').value = state.outputBuffers === 1 ? '1' : '2';
 $('diagnosticsMode').value = state.diagnosticsMode || 'compact';
 $('tokenizerFormat').value = state.tokenizerFormat || 'json';
 $('modelExecution').value = state.modelExecution || (isIOS ? IOS_DEFAULTS.modelExecution : 'resident');
@@ -28,9 +30,12 @@ $('repeatDelay').value = String(state.repeatDelay ?? (isIOS ? IOS_DEFAULTS.repea
 $('kind').value = state.kind || 'resident';
 function updateControls() {
   const evaluationURL = new URL('../../../index.html', location.href);
-  for (const [key, id] of [['ortMode', 'mode'], ['stagingMiB', 'staging'], ['diagnosticsMode', 'diagnosticsMode'], ['tokenizerFormat', 'tokenizerFormat'], ['modelExecution', 'modelExecution']]) {
+  for (const [key, id] of [['ortMode', 'mode'], ['stagingMiB', 'staging'], ['outputBuffers', 'outputBuffers'], ['diagnosticsMode', 'diagnosticsMode'], ['tokenizerFormat', 'tokenizerFormat'], ['modelExecution', 'modelExecution']]) {
     evaluationURL.searchParams.set(key, $(id).value);
   }
+  // Resident inference on this iPhone ended within a second of its first token in
+  // every session so far; the note is a warning, not a block, so the comparison stays possible.
+  $('residentNote').hidden = !(isIOS && $('modelExecution').value === 'resident' && ['probe', 'evaluation'].includes($('kind').value));
   $('evaluationLink').href = evaluationURL.href;
   $('start').disabled = !!state.active;
   $('export').disabled = false;
@@ -44,11 +49,12 @@ function updateControls() {
     $('sessionIdle').disabled = $('kind').value !== 'session-only';
     // The staging size applies to streamed loading and its per-token output
     // scratch as well; 2 MiB is no longer forced for the streamed path.
-    $('modelExecution').disabled = !['session-only', 'load', 'warm-load', 'probe', 'evaluation'].includes($('kind').value);
+    $('modelExecution').disabled = !streamedKinds.includes($('kind').value);
+    $('outputBuffers').disabled = $('modelExecution').disabled || $('modelExecution').value !== 'streamed';
   }
 }
 $('kind').addEventListener('change', updateControls);
-for (const id of ['mode', 'staging', 'diagnosticsMode', 'tokenizerFormat', 'modelExecution']) $(id).addEventListener('change', updateControls);
+for (const id of ['mode', 'staging', 'outputBuffers', 'diagnosticsMode', 'tokenizerFormat', 'modelExecution']) $(id).addEventListener('change', updateControls);
 // Session start to graph planning, with the WASM heap at that point: the
 // comparison for repeats that end at `ort-plan-start` before any weight.
 const ortPlanLabel = plan => !plan ? '—' : [plan.sinceSessionStartMs == null ? null : `세션 시작 후 ${(plan.sinceSessionStartMs / 1000).toFixed(1)}초`,
@@ -70,7 +76,7 @@ function render() {
     const idle = execution.idleRequestedSeconds === 0 ? '대기 없음'
       : `${execution.idleElapsedMs == null ? '미기록' : (execution.idleElapsedMs / 1000).toFixed(1)} / ${execution.idleRequestedSeconds ?? '?'}초`;
     const setting = (result.kind === 'tokenizer' ? '모델 세션 없음' : `${result.stagingMiB ?? '?'} MiB`) +
-      (execution.modelExecution === 'streamed' ? ' · FP32 순차 로딩' : '') +
+      (execution.modelExecution === 'streamed' ? ` · FP32 순차 로딩${execution.outputBuffers ? ` · 출력 버퍼 ${execution.outputBuffers}개` : ''}` : '') +
       (execution.tokenizerFormat ? ` · 토크나이저 ${execution.tokenizerFormat}` : '');
     const recovered = comparison.recoveryClassification;
     const unload = unloadLabel(comparison);
@@ -79,7 +85,7 @@ function render() {
       recovered === 'cleanup-reentry' ? '자원 정리 중 재진입 · 정리 완료 미확인' :
       result.interrupted ? (comparison.interruptedPhase === 'inference' ? `${inferenceLabel(comparison.interruptedInference?.phase)} 중 중단 (${unconfirmed})`
         : execution.modelSessionCreated ? `세션 생성 후 중단 (${unconfirmed})` : `실행 중 중단 (${unconfirmed})`) :
-      result.success ? scopeLabel(execution.completedScope) + (recovered === 'completed-run-reentry' ? ' · 완료 후 재진입' : '') : result.cancelled ? '사용자 중단' : '실패',
+      result.success ? scopeLabel(execution.completedScope) + (recovered === 'completed-run-reentry' ? ' · 완료 후 재진입' : '') : result.cancelled ? stopLabel(comparison) : '실패',
       `${group.startedRuns}회 시작 · ${group.successfulRuns}회 성공 / 요청 ${group.requestedRuns ?? '?'}회`, idle,
       `${result.reportedDevice || '기기 미기록'} · 검사기 ${{ attached: '연결', detached: '미연결' }[result.inspector] || '미기록'}`,
       (comparison.releaseId || result.releaseId)?.slice(0, 12) || '—', cache,
@@ -200,12 +206,12 @@ async function finish(result) {
   save(); render();
   $('start').disabled = false; $('stop').disabled = true;
   updateControls();
-  $('status').textContent = result.success ? scopeLabel(state.results.at(-1).execution.completedScope) : result.cancelled ? '사용자가 중단했습니다.' : '실험 실패 · 진단 JSON을 저장해 주세요.';
+  $('status').textContent = result.success ? scopeLabel(state.results.at(-1).execution.completedScope) : result.cancelled ? `${stopLabel(state.results.at(-1).comparison)} · 진단 JSON을 저장해 주세요.` : '실험 실패 · 진단 JSON을 저장해 주세요.';
   $('last').textContent = JSON.stringify({ ...state.results.at(-1), diagnostic }, null, 2);
   if (result.success && active.remaining > 1) {
     const next = { kind: active.kind, remaining: active.remaining - 1,
       seriesId: active.seriesId, requestedRuns: active.requestedRuns, attemptNumber: active.attemptNumber + 1,
-      diagnosticsMode: active.diagnosticsMode, mode: active.mode, stagingMiB: active.stagingMiB, inspector: active.inspector,
+      diagnosticsMode: active.diagnosticsMode, mode: active.mode, stagingMiB: active.stagingMiB, outputBuffers: active.outputBuffers, inspector: active.inspector,
       tokenizerFormat: active.tokenizerFormat, modelExecution: active.modelExecution, idleSeconds: active.idleSeconds,
       repeatDelaySeconds: active.repeatDelaySeconds ?? 0, reportedDevice: active.reportedDevice, releaseId: active.releaseId };
     const delayMs = (active.repeatDelaySeconds || 0) * 1000;
@@ -228,13 +234,14 @@ function cancelRepeatWait() {
 }
 async function begin(config) {
   if (state.active) return;
-  config = { diagnosticsMode: state.diagnosticsMode || 'compact', tokenizerFormat: state.tokenizerFormat || 'json', mode: state.mode, stagingMiB: 8, inspector: 'unknown', reportedDevice: state.device, ...config };
+  config = { diagnosticsMode: state.diagnosticsMode || 'compact', tokenizerFormat: state.tokenizerFormat || 'json', mode: state.mode, stagingMiB: 8, outputBuffers: 2, inspector: 'unknown', reportedDevice: state.device, ...config };
   config.seriesId ||= newRunId();
   config.requestedRuns ??= config.remaining || 1;
   config.attemptNumber ??= 1;
   if (isResident(config.kind)) config.mode = null;
   if (config.kind === 'tokenizer') config.stagingMiB = null;
-  if (!['session-only', 'load', 'warm-load', 'probe', 'evaluation'].includes(config.kind)) config.modelExecution = 'resident';
+  if (!streamedKinds.includes(config.kind)) config.modelExecution = 'resident';
+  if (config.modelExecution !== 'streamed') config.outputBuffers = null;
   state.kind = config.kind; $('kind').value = config.kind;
   const runId = config.runId || newRunId();
   state.active = { ...config, runId, runIds: [runId], phase: 'execution', startedAt: Date.now() }; save();
@@ -261,7 +268,8 @@ async function begin(config) {
   const context = runContext(state.results, Date.now());
   state.active.runContext = context; save();
   const environment = { reportedDevice: config.reportedDevice, userAgent: navigator.userAgent, experiment: config.kind,
-    inspector: config.inspector, diagnosticsMode: config.diagnosticsMode, stagingMiB: config.stagingMiB, ...executionSettings(config.kind, config),
+    inspector: config.inspector, diagnosticsMode: config.diagnosticsMode, stagingMiB: config.stagingMiB, outputBuffers: config.outputBuffers ?? null,
+    ...executionSettings(config.kind, config),
     tokenizerFormat: config.tokenizerFormat, modelExecution: config.modelExecution || 'resident', navigation: config.navigation ?? null,
     seriesId: config.seriesId, requestedRuns: config.requestedRuns, attemptNumber: config.attemptNumber,
     repeatDelaySeconds: config.repeatDelaySeconds ?? 0, runContext: context };
@@ -285,7 +293,7 @@ async function begin(config) {
   worker.onmessage = async ({ data }) => {
     if (!state.active || finishing) return;
     if (data.type === 'worker-ready') worker.postMessage({ type: applicationOperation(config.kind),
-      device: 'webgpu', stagingMiB: config.stagingMiB, runId, environment });
+      device: 'webgpu', stagingMiB: config.stagingMiB, outputBuffers: config.outputBuffers ?? undefined, runId, environment });
     if (data.type === 'preparation') $('last').textContent = JSON.stringify(data.record, null, 2);
     if (data.type === 'phase') $('status').textContent = data.text;
     if (data.type === 'progress') { $('status').textContent = data.record.stage; $('last').textContent = JSON.stringify(data.record, null, 2); }
@@ -322,14 +330,15 @@ $('start').onclick = () => {
   state.diagnosticsMode = $('diagnosticsMode').value;
   state.modelExecution = $('modelExecution').value;
   state.tokenizerFormat = $('tokenizerFormat').value; state.sessionIdle = Number($('sessionIdle').value);
-  state.stagingMiB = Number($('staging').value); state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
+  state.stagingMiB = Number($('staging').value); state.outputBuffers = Number($('outputBuffers').value) === 1 ? 1 : 2;
+  state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   state.repeatDelay = Number($('repeatDelay').value) || 0;
   const kind = $('kind').value;
   state.kind = kind;
   reloadFor({ kind, remaining: kind === 'warm-load' ? 5 : canRepeat(kind) ? state.repeats : 1,
     tokenizerFormat: state.tokenizerFormat, modelExecution: state.modelExecution, ...(kind === 'session-only' ? { idleSeconds: state.sessionIdle } : {}),
     repeatDelaySeconds: state.repeatDelay, diagnosticsMode: state.diagnosticsMode, mode: state.mode, stagingMiB: state.stagingMiB,
-    inspector: state.inspector, reportedDevice: state.device });
+    outputBuffers: state.outputBuffers, inspector: state.inspector, reportedDevice: state.device });
 };
 $('stop').onclick = async () => {
   if (cancelRepeatWait()) { $('status').textContent = '남은 반복을 취소했습니다.'; updateControls(); return; }
@@ -414,7 +423,7 @@ $('export').onclick = async () => {
   });
   const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(), deviceClock: clock, userAgent: navigator.userAgent,
     screenSettings: { device: state.device, diagnosticsMode: state.diagnosticsMode, tokenizerFormat: state.tokenizerFormat, modelExecution: state.modelExecution,
-      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, inspector: state.inspector, repeats: state.repeats,
+      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, outputBuffers: state.outputBuffers ?? 2, inspector: state.inspector, repeats: state.repeats,
       repeatDelay: state.repeatDelay ?? 0 },
     active: state.active, results, series: seriesSummary(results, state.active),
     deviceReports: state.deviceReports || [],

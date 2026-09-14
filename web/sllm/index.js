@@ -251,6 +251,8 @@ export function initSllm(root) {
   const runtimeOptions = new URLSearchParams(location.search);
   workerURL.searchParams.set('ortMode', runtimeOptions.get('ortMode') || 'asyncify');
   const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
+  // `outputBuffers=1` serializes the streamed output projection (the September 13 path) for comparison; 2 overlaps it.
+  const outputBuffers = Number(runtimeOptions.get('outputBuffers')) === 1 ? 1 : 2;
   workerURL.searchParams.set('diagnosticsMode', runtimeOptions.get('diagnosticsMode') || 'compact');
   workerURL.searchParams.set('tokenizerFormat', runtimeOptions.get('tokenizerFormat') || 'json');
   // iOS 는 URL 이 정하지 않으면 가중치 순차 로딩(streamed)이다. 9월 13일 실기기 세션에서 전체
@@ -337,7 +339,7 @@ export function initSllm(root) {
         break;
       case 'aborted':
         clearAttempt();
-        els.phase.textContent = `중단됨 (${m.at}행까지 실행)`;
+        els.phase.textContent = `사용자 정지 · ${m.at}행 완료`;
         els.start.disabled = false; els.stop.disabled = true;
         break;
       case 'disposed':
@@ -349,7 +351,7 @@ export function initSllm(root) {
         els.prep.hidden = true;
         addRow(-1, null, m.error);
         // ORT may keep a failed WASM instance/allocator. Retry in a fresh page.
-        els.phase.textContent = `${m.cancelled ? '중단됨' : '실행 실패'} · 페이지를 새로 열어 다시 시도해 주세요.`;
+        els.phase.textContent = `${m.cancelled ? `사용자 정지${Number.isInteger(m.completedRows) ? ` · ${m.completedRows}행 완료` : ''}` : '실행 실패'} · 페이지를 새로 열어 다시 시도해 주세요.`;
         els.start.disabled = true; els.stop.disabled = true;
         worker.terminate();
         break;
@@ -388,7 +390,7 @@ export function initSllm(root) {
       const p = resolvePlan(chosen);
       if (p.note) badge(`↓ ${p.note}`, 'cpu');
       const runId = markAttempt(p.device);
-      worker.postMessage({ type: 'load', device: p.device, stagingMiB, runId, environment });
+      worker.postMessage({ type: 'load', device: p.device, stagingMiB, outputBuffers, runId, environment });
     }
   };
   async function finishStoppedLoad(runId) {
@@ -436,7 +438,7 @@ export function initSllm(root) {
       return;
     }
     els.phase.textContent = modelExecution === 'streamed'
-      ? `준비 완료 · 가중치 순차 로딩${modelExecutionSource === 'default-ios' ? ' (iOS 기본)' : ''}` : '준비 완료 · 전체 가중치 유지';
+      ? `준비 완료 · 가중치 순차 로딩${modelExecutionSource === 'default-ios' ? ' (iOS 기본)' : ''} · 출력 버퍼 ${outputBuffers}개` : '준비 완료 · 전체 가중치 유지';
     els.start.disabled = false;
   })();
 }

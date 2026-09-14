@@ -426,6 +426,100 @@ streamed cached load ×5 with the 30 s delay, a streamed short probe and a
 `rowLimit=10` evaluation on this commit to measure the upload change, and then
 the two 100-row streamed evaluations.
 
+## September 14 morning exports (release `5c7261485e7c`, commit `fae2b3a`)
+
+Same iPhone, Chrome 153, Asyncify, nine OPFS cache hits in every run, no
+persisted GPU fault, no device loss, `compact` diagnostics, 8 MiB staging and
+streamed scratch, 30 s repeat delay on the experiment page. The evaluation page
+was opened without parameters and therefore streamed; it was exported once
+(`didimdol-diagnostics (12)`), the experiment page five times
+(`iphone-fp32-experiments (65)`–`(69)`, each a prefix of the next). No device
+file was collected in this session.
+
+| KST | Screen / experiment | Outcome |
+|---|---|---|
+| 07:34:26 | Evaluation page session create, streamed 8 MiB | 235/235, 383 MiB weights, `ready` in 11.2 s |
+| 07:34:37–07:40:53 | Evaluation page 100-row evaluation, streamed | **rows 1–6 complete in 373 s**, one auxiliary `top_k` session, peak 520 MiB; stopped by the tester in row 7 (`AbortError` at output-upload chunk 13, status `cancelled`) |
+| 07:41:26–07:46:41 | 1, 1b, 1c, 1d, small runtime 120 s | all complete, 251/251 |
+| 07:57:40–07:59:39 | tokenizer, 2c streamed, 2c resident, 3 streamed, 3 resident | all complete (2c 7.3 s / 9.0 s, 3 `ready` 6.1 s / 9.4 s) |
+| 08:00:45–08:03:09 | 4 cached load 1–5/5, streamed, 30 s delay | 5/5 `ready`, 5.5–6.1 s |
+| 08:03:46–08:06:20 | 4 cached load 1–5/5, resident, 30 s delay | 5/5 `ready`, 8.0–8.7 s |
+| 08:07:09 | 5 short inference, resident | load `ready` in 9.1 s, **interrupted 38 ms after `probe-inference-start`** (row 3, before the first token), 1,072 MiB requested, page back after 0.9 s |
+| 08:07:43 | 5 short inference, streamed | complete in 47.9 s, 32 tokens × 2 (20.3 s, 18.6 s), peak 522 MiB |
+
+The interruption recorded `no-unload-event` and `navigationType: back_forward`,
+like the three before it. The evaluation stop is not an interruption: the
+worker caught the `AbortError` of the stop message and finished the journal as
+`cancelled`; a page that went away would have left the run `running`, as the
+resident probe did.
+
+Evaluation rows, all with `eos`:
+
+| Row | Prompt | Tokens | ms per token | TTFT | ROUGE-1 F1 |
+|---|---|---|---|---|---|
+| 1 | 211 | 85 | 598 | 1,113 | 0.335 |
+| 2 | 37 | 213 | 465 | 732 | 0.185 |
+| 3 | 35 | 110 | 476 | 729 | 0.234 |
+| 4 | 217 | 71 | 516 | 1,168 | 0.393 |
+| 5 | 50 | 137 | 526 | 828 | 0.320 |
+| 6 | 245 | 108 | 516 | 1,305 | 0.289 |
+
+Row 5 (the same 137-token row that took 91.6 s the night before) took 72.1 s,
+and rows 1–5 took 317 s against 389 s. In the steady state a token costs about
+500 ms: 261 ms uploading the 672 MB output projection (162 ms of OPFS reads in
+80 calls, 19 ms in 16 queue waits, the rest `writeBuffer` copies), 140 ms in the
+16 head projections and readbacks, and about 100 ms in the body graph. Row 1 is
+slower (598 ms) because the output projection is not in the file cache after a
+load; the streamed probe shows the same, its first prompt reading pieces in
+138–346 ms before settling at 148 ms. At this rate one 100-row pass takes about
+100 minutes. GPU requests stayed at 508–520 MB with about 1,030 live buffers
+across the six rows; the WASM heap grew once, from 24.2 MB to 29.1 MB, in row 6.
+
+Journal traffic: the evaluation run committed 434 entries (0.8 MB) in 375 s
+against about 6,400 entries the night before, but each load still wrote 3,255
+entries (6.3 MB) and the experiment session's 24 runs 73,708 entries (153 MB).
+
+What repeated: the resident short inference ended within a second of its first
+prompt for the fourth session in a row (07:35, 17:40, 23:15 on September 13,
+08:07 on September 14), this time before the first token. What changed: with
+the 30 s delay, ten consecutive cached loads completed (the night before, 0 s
+delay ended a resident repeat at 607 MiB and a streamed repeat at
+`ort-plan-start`), and the streamed evaluation's tokens cost 500 ms instead of
+665 ms. The streamed probe did not change (47.9 s against 46.7 s) because its
+first prompt pays the cold file cache; row-level numbers are the comparison.
+
+Changes in this commit:
+
+- **Overlapped output projection.** `StreamedWeights` keeps two 40 MiB output
+  buffers by default; while the head session projects chunk *i* the next chunk
+  is read from OPFS and queued into the other buffer. `outputBuffers=1` (the
+  evaluation URL and the experiment page's selector) restores the serial path
+  for comparison. The streamed GPU request grows by 40 MiB to about 463 MiB of
+  weights and buffers. `streaming` gains `gpuBufferCount` and `projectionMs`,
+  the wall time of the output loop; `uploadMs + outputComputeMs − projectionMs`
+  is what the overlap saved. `streamed-error` records carry `computing` (the
+  chunk in flight) next to `position`. Error scopes now bracket each
+  `writeBuffer` synchronously, since an upload can run while the runtime's own
+  `run()` is pending on the same device. Not yet measured on the phone.
+- **Position records.** The pre-call records (`upload-initializer`,
+  `range-read`, `gpu-write`, `gpu-wait`, and the resident probe's read, write
+  and wait) carry the position and progress counters only, with a slim ledger
+  (`positionRecord: true`), and update the durable head's `last` without a ring
+  slot. The ring keeps the allocation and completion of every initializer and
+  numbers its slots by `eventCount`; older journals still read. The fixed
+  persistence note is attached by `readRun` instead of being written with every
+  head. Expected: about 2,100 entries and under 2 MB per full load.
+- **Stop source.** A run ended by the page's stop message finishes with
+  `stopSource: 'user-stop'` and, for evaluations, `completedRows`; both pages
+  show "사용자 정지 · N행 완료" instead of a bare abort message.
+- **Resident inference note.** The experiment page shows a warning, not a
+  block, when resident execution is selected for a probe or evaluation on iOS.
+
+Still owed from the phone: the `.ips` files for the four resident interruptions
+(the latest 08:07:19), a streamed probe and a `rowLimit=10` evaluation with
+`outputBuffers=2` against `outputBuffers=1` on this commit, a load export to
+confirm the journal size, and then the two 100-row streamed evaluations.
+
 ## Experiment 1d: small ORT session plus stored-weight residency
 
 `runtime-resident` runs through the application worker, under the same origin
@@ -488,7 +582,13 @@ durable recovery until a later write succeeds.
 
 Recent history has 64 slots, each capped at 16,384 JSON characters. Oversized
 history entries carry `historyTruncated`; the full latest event and original
-fault remain separately available. Initializer order is capped at 2,048 entries.
+fault remain separately available. Pre-call position records (`upload-initializer`,
+`range-read`, `gpu-write`, `gpu-wait`, `resident-read`, `resident-write`,
+`resident-wait`) update the head's `last` only and take no ring slot, so the
+ring holds the allocation and completion of about 32 initializers rather than
+the pieces of the last ten; ring slots are numbered by `eventCount`, and
+journals numbered by `recordCount` still read. Initializer order is capped at
+2,048 entries.
 Terminal summaries are stored once rather than repeated in recent events.
 `readRun()` reconstructs the usual export shape and also reads schema 2/3 files
 and snapshot records. Cleanup metadata uses a separate key so it does not replace

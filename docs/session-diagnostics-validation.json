@@ -1,8 +1,8 @@
 {
-  "validatedAt": "2026-09-12T11:50:36.901540+00:00",
-  "releaseId": "b9e9395e50aac44ab625e558f2ae03e666a70f11f18bc4e85ce907c876245f30",
+  "validatedAt": "2026-09-14T12:30:36.091823+00:00",
+  "releaseId": "f3d93d0fd7bba3809aec9acc56b531f2039d09ecdccc5a6e97af8dccf791f19d",
   "provenance": {
-    "appCommit": "722cd5689cc18299057d07bdfa4d240809450dc7",
+    "appCommit": "fae2b3ac31029add7018dc6d11355db0a657c2ec",
     "appDirty": true,
     "nodeVersion": "v22.22.1"
   },
@@ -18,15 +18,15 @@
   },
   "checks": {
     "nodeTests": {
-      "passed": 50,
+      "passed": 90,
       "failed": 0
     },
     "pythonTests": {
-      "passed": 2,
+      "passed": 3,
       "failed": 0
     },
     "browserCases": {
-      "passed": 22,
+      "passed": 19,
       "failed": 0,
       "ids": [
         "atomic-journal-recovery",
@@ -41,19 +41,24 @@
         "smoke-stock",
         "tokenizer-ui",
         "tokenizer-recovery-ui",
+        "prepared-tokenizer-ui",
+        "prepared-tokenizer-corruption",
+        "cleanup-reentry-ui",
         "snapshot-and-cooperative-cancel",
-        "app-from-pretrained",
-        "comparison-resident-opfs",
-        "comparison-resident-opfs-tokenizer",
-        "comparison-runtime-resident",
-        "comparison-session-only",
-        "Gemma-FP32-8MiB",
         "gpu-tracking-browser",
         "resident-corruption",
         "diagnostic-ui"
       ]
     },
-    "releaseVerifiedAssets": 67
+    "releaseVerifiedAssets": 67,
+    "streamedBrowserCases": {
+      "passed": 2,
+      "failed": 0,
+      "ids": [
+        "resident-asyncify",
+        "streamed-asyncify"
+      ]
+    }
   },
   "comparisons": [
     {
@@ -186,7 +191,10 @@
       "Journal tests cover transaction abort, durable latest position, failed-write retry, bounded history, and schema 2/3 compatibility.",
       "Within the synthetic persistence unit test, compact serialized writes are less than one fifth of snapshot writes; this is not RSS or phone performance.",
       "The local full session made zero observed shader/pipeline creation calls during session creation. This does not establish the iPhone termination cause.",
-      "Three phone session/application loads, five cached loads, short/long inference and two 100-row evaluations remain required."
+      "Three phone session/application loads, five cached loads, short/long inference and two 100-row evaluations remain required.",
+      "Pre-call position records (upload-initializer, range-read, gpu-write, gpu-wait, resident read/write/wait) update the durable head only, carry progress counters and a slim ledger, and take no event ring slot; ring slots are numbered by eventCount and older journals still read.",
+      "Cancelled runs record stopSource user-stop and, for evaluations, completedRows; both pages show the tester's stop and the finished row count.",
+      "The streamed output projection uses two output buffers by default (outputBuffers=1 keeps the serial comparison); the iPhone measurement of the difference is still owed."
     ]
   }
 }

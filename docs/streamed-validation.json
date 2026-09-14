@@ -1,5 +1,5 @@
 {
-  "date": "2026-09-13",
+  "date": "2026-09-14",
   "environment": "Linux, Playwright Chromium, SwiftShader (not iPhone)",
   "sourceRevision": "8c50d7686bb1b205c02d42bb4b64505483c41a2b",
   "sourceGraphSha256": "bbbfa81fde1230c1b16566d27e3e21d1dede60ec9df74fc6847921e86e012c5a",
@@ -15,7 +15,7 @@
       "sha256": "7ae6e019c8a362b2805aab2b7420816a0821d94f0ccce000232f52c71837a920"
     }
   },
-  "unitTests": 61,
+  "unitTests": 90,
   "pythonTests": 3,
   "existingBrowserCases": 19,
   "cpuCorrectness": [
@@ -46,15 +46,16 @@
     {
       "mode": "asyncify",
       "execution": "resident",
-      "releaseId": "aadb5ef7f1f614486a557d793eb095f8d70b380b9b719b88e1808b162b32ed2c",
+      "releaseId": "f3d93d0fd7bba3809aec9acc56b531f2039d09ecdccc5a6e97af8dccf791f19d",
       "bodyOrResidentWeightBytes": 1072392704,
       "sessionGpuRequestedBytes": 1072401888,
       "inferenceGpuRequestedPeakBytes": 1160940768,
+      "cleanupSucceeded": true,
       "outputs": [
         {
           "row": 3,
           "promptLen": 35,
-          "durationMs": 14133.5,
+          "durationMs": 12949.600000023842,
           "tokens": [
             238789,
             236764
@@ -63,27 +64,52 @@
         {
           "row": 95,
           "promptLen": 266,
-          "durationMs": 32389.30000001192,
+          "durationMs": 30081.599999964237,
           "tokens": [
             238789,
             236764
           ]
         }
-      ],
-      "cleanupSucceeded": true
+      ]
     },
     {
       "mode": "asyncify",
       "execution": "streamed",
-      "releaseId": "aadb5ef7f1f614486a557d793eb095f8d70b380b9b719b88e1808b162b32ed2c",
+      "releaseId": "f3d93d0fd7bba3809aec9acc56b531f2039d09ecdccc5a6e97af8dccf791f19d",
       "bodyOrResidentWeightBytes": 401304064,
-      "sessionGpuRequestedBytes": 443256032,
-      "inferenceGpuRequestedPeakBytes": 516625696,
+      "sessionGpuRequestedBytes": 485199072,
+      "inferenceGpuRequestedPeakBytes": 558568736,
+      "cleanupSucceeded": true,
+      "outputBuffers": 2,
+      "repeatedProbeGpuRequestedBytes": [
+        558479136,
+        558479136
+      ],
+      "streaming": {
+        "gpuBufferBytes": 83886080,
+        "gpuBufferCount": 2,
+        "cpuScratchBytes": 8388608,
+        "embeddingReadBytes": 1551360,
+        "outputReadBytes": 5368709120,
+        "uploadedBytes": 5368709120,
+        "embeddingMs": 732.5,
+        "uploadMs": 14166.899999439716,
+        "outputReadMs": 8353.99999988079,
+        "queueWaitMs": 5017.799999713898,
+        "outputComputeMs": 12831.69999986887,
+        "projectionMs": 15753.399999856949,
+        "projections": 8,
+        "chunks": 128,
+        "readCalls": 640,
+        "writeCalls": 640,
+        "queueWaits": 128
+      },
+      "overlapSavedMs": 11245.2,
       "outputs": [
         {
           "row": 3,
           "promptLen": 35,
-          "durationMs": 12515,
+          "durationMs": 10201.399999976158,
           "tokens": [
             238789,
             236764
@@ -92,30 +118,13 @@
         {
           "row": 95,
           "promptLen": 266,
-          "durationMs": 37185,
+          "durationMs": 32111,
           "tokens": [
             238789,
             236764
           ]
         }
-      ],
-      "cleanupSucceeded": true,
-      "repeatedProbeGpuRequestedBytes": [
-        516536096,
-        516536096
-      ],
-      "streaming": {
-        "gpuBufferBytes": 41943040,
-        "cpuScratchBytes": 2097152,
-        "embeddingReadBytes": 1551360,
-        "outputReadBytes": 5368709120,
-        "uploadedBytes": 5368709120,
-        "embeddingMs": 751.9999999701977,
-        "uploadMs": 11252.90000000596,
-        "outputComputeMs": 13131.999999940395,
-        "projections": 8,
-        "chunks": 128
-      }
+      ]
     },
     {
       "mode": "jspi",
@@ -177,6 +186,8 @@
     "GPU requests are not RSS or physical driver memory.",
     "No iPhone run, five-load handset acceptance, or two full 100-row evaluations were performed.",
     "Browser output comparisons used two generated tokens per short/long prompt; CPU comparisons used four.",
-    "Final upload error-preservation refinement was covered by unit tests; browser case release identities are recorded individually."
+    "Final upload error-preservation refinement was covered by unit tests; browser case release identities are recorded individually.",
+    "The jspi entry is from release c6a0348fe481 (one output buffer) and was not rerun on this commit.",
+    "Two output buffers overlap the next chunk's OPFS read with the previous projection; overlapSavedMs is uploadMs + outputComputeMs - projectionMs on SwiftShader and says nothing about the iPhone, where the comparison against outputBuffers=1 is still owed."
   ]
 }

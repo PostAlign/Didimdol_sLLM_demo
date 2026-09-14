@@ -286,7 +286,7 @@ try {
       catch { return false; }
     });
     await page.locator('#stop').click();
-    await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 10000 });
+    await page.locator('#status').getByText('사용자 정지 · 진단 JSON을 저장해 주세요.', { exact: true }).waitFor({ timeout: 10000 });
     releaseTokenRead();
     const cancelled = await page.evaluate(async () => {
       const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
@@ -481,7 +481,7 @@ try {
           throw new Error('Session observation start was not persisted');
         });
         await page.locator('#stop').click();
-        await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 15000 });
+        await page.locator('#status').getByText('사용자 정지 · 진단 JSON을 저장해 주세요.', { exact: true }).waitFor({ timeout: 15000 });
         const stopped = await page.evaluate(async () => {
           const state = JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3'));
           const result = state.results.at(-1);
@@ -724,7 +724,7 @@ try {
   await page.locator('#start').click();
   await page.locator('#status').getByText('runtime-idle', { exact: true }).waitFor({ timeout: 120000 });
   await page.locator('#stop').click();
-  await page.locator('#status').getByText('사용자가 중단했습니다.').waitFor();
+  await page.locator('#status').getByText('사용자 정지').waitFor();
   const downloadReady = page.waitForEvent('download');
   await page.locator('#export').click();
   const download = await downloadReady;

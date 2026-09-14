@@ -192,7 +192,7 @@ test('preparation awaits durable markers and retains file stages after model eve
   });
   assert.deepEqual(requests, ['tokenizer_config.json', 'tokenizer.json']);
   assert.equal(result.summary.vocabSize, 1);
-  for (let i = 0; i < 70; i++) await run.checkpoint({ stage: 'gpu-wait' });
+  for (let i = 0; i < 70; i++) await run.checkpoint({ stage: 'initializer-complete' });
   assert.equal(saved.records.some(record => record.stage === 'tokenizer-ready'), false);
   assert.ok(saved.preparation['tokenizer.json']['tokenizer-decode-start']);
   assert.equal(diagnosticSummary(saved).tokenizer.vocabSize, 1);

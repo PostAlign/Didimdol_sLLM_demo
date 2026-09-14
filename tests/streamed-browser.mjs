@@ -96,11 +96,17 @@ try {
     console.log(JSON.stringify({ execution, inference, sampleReasons: result.samples.map(sample => sample.reason) }));
     if (execution === 'streamed') {
       assert.equal(result.session.metrics.gpuWeightAllocated, 401304064);
-      assert.equal(result.session.streaming.gpuBufferBytes, 41943040);
+      // Two 40 MiB output buffers by default: the next chunk is read while the previous one is projected.
+      assert.equal(result.session.outputBuffers, 2);
+      assert.equal(result.session.streaming.gpuBufferBytes, 2 * 41943040);
+      assert.equal(result.session.streaming.gpuBufferCount, 2);
       assert.equal(result.session.gpuLedger.tracking.deviceCount, 1);
       const categories = Object.fromEntries(result.probe.gpuLedger.categories.map(value => [value.role, value]));
-      assert.equal(categories['streamed-weight'].createdCount, 1);
-      assert.equal(categories['streamed-weight'].requestedCurrent, 41943040);
+      assert.equal(categories['streamed-weight'].createdCount, 2);
+      assert.equal(categories['streamed-weight'].requestedCurrent, 2 * 41943040);
+      const streaming = result.steps.at(-1).streaming;
+      assert.ok(streaming.projectionMs > 0 && streaming.projectionMs <= streaming.uploadMs + streaming.outputComputeMs + 1,
+        `projection wall time ${streaming.projectionMs} is bounded by the overlapped parts ${streaming.uploadMs} + ${streaming.outputComputeMs}`);
       assert.deepEqual(result.probe.outputs.map(x => x.tokens), result.firstProbe.outputs.map(x => x.tokens));
       assert.ok(result.probe.gpuLedger.requestedCurrent <= result.firstProbe.gpuLedger.requestedCurrent + 2**20,
         'repeating the same prompts must not accumulate GPU allocations');
@@ -145,7 +151,7 @@ try {
     await page.locator('#start').click();
     await page.locator('#status').getByText('세션 생성 완료 · 세션을 유지하며 관찰 중…', { exact: true }).waitFor({ timeout: 120000 });
     await page.locator('#stop').click();
-    await page.locator('#status').getByText('사용자가 중단했습니다.', { exact: true }).waitFor({ timeout: 15000 });
+    await page.locator('#status').getByText('사용자 정지 · 진단 JSON을 저장해 주세요.', { exact: true }).waitFor({ timeout: 15000 });
     const cancelled = await page.evaluate(() => JSON.parse(localStorage.getItem('didimdol.device-experiments.results.v3')).results.at(-1));
     assert.equal(cancelled.cancelled, true);
     assert.equal(cancelled.comparison.cleanup.success, true);

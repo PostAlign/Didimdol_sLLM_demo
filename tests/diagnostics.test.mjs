@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock, ortPlanEvidence } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock, ortPlanEvidence, stopLabel } from '../web/sllm/diagnostics.js';
 
 test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
   const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
@@ -84,6 +84,83 @@ test('incremental writes reduce serialized payload while preserving legacy and s
     store.values.set(`run:${old.runId}`, old);
     assert.deepEqual(await readRun(old.runId, store), old);
   }
+});
+
+test('position records update the durable head only and stay out of the event ring', async () => {
+  const store = journalStore();
+  const run = new RunDiagnostics('positions', {}, undefined, { persistBatch: entries => store.persistBatch(entries) });
+  await run.checkpoint({ stage: 'graph-verified', expectedInitializerCount: 2 });
+  // A load of two initializers: the six records of each are one allocation, four
+  // pre-call positions and one completion. Only the first and last go into the ring.
+  for (const name of ['W0', 'W1']) {
+    await run.checkpoint({ stage: 'allocate-initializer', initializerName: name, length: 40, metrics: { gpuWeightAllocated: 40 }, storage: { rangeReadBytes: 0 } });
+    for (const stage of ['upload-initializer', 'range-read', 'gpu-write', 'gpu-wait']) {
+      await run.checkpoint({ stage, initializerName: name, destinationOffset: 0, metrics: { gpuWeightAllocated: 40, loadedInitializerCount: 0 } });
+    }
+    await run.checkpoint({ stage: 'initializer-complete', initializerName: name, metrics: { gpuWeightAllocated: 40, loadedInitializerCount: 1 }, storage: { rangeReadBytes: 40 } });
+  }
+  assert.equal(run.state.recordCount, 13);
+  assert.equal(run.state.eventCount, 5);
+  assert.deepEqual(run.state.records.map(record => record.stage),
+    ['graph-verified', 'allocate-initializer', 'initializer-complete', 'allocate-initializer', 'initializer-complete']);
+  const entries = [...store.values.keys()];
+  assert.equal(entries.filter(key => key.includes(':event:')).length, 5, 'position records write no ring slot');
+  const heads = store.writes.map(batch => batch.find(([key]) => key.endsWith(':head'))?.[1]).filter(Boolean);
+  assert.equal(heads.filter(head => head.last).length, 8, 'every position record is the head\'s last');
+  assert.equal(heads.at(-1).last, undefined, 'a ring record is found by the head\'s event count instead');
+  assert.equal(heads.at(-1).persistence.note, undefined, 'the fixed note is not repeated with every head');
+  let recovered = await readRun('positions', store);
+  assert.equal(recovered.last.stage, 'initializer-complete');
+  assert.equal(recovered.records.length, 5);
+  assert.equal(recovered.eventCount, 5);
+  assert.ok(recovered.persistence.note.includes('serializedBytes'), 'readRun re-attaches the note');
+  assert.equal(diagnosticSummary(recovered).storage.rangeReadBytes, 40);
+  // Interrupted before a queue wait: the position is durable and the summary reads
+  // the position's counters, while storage comes from the ring's last full record.
+  await run.checkpoint({ stage: 'allocate-initializer', initializerName: 'W2', length: 40, metrics: { gpuWeightAllocated: 80 }, storage: { rangeReadBytes: 80 } });
+  await run.checkpoint({ stage: 'gpu-wait', initializerName: 'W2', destinationOffset: 8, phase: 'before-call',
+    metrics: { gpuWeightAllocated: 80, gpuQueueCompletedBytes: 8, loadedInitializerCount: 2 }, gpuLedger: { requestedCurrent: 80, tracking: { status: 'complete' } } });
+  recovered = await readRun('positions', store);
+  assert.equal(recovered.last.stage, 'gpu-wait');
+  assert.equal(recovered.records.at(-1).stage, 'allocate-initializer');
+  const summary = diagnosticSummary({ ...recovered, recovery: { classification: 'interrupted', interruptedPhase: 'execution' } });
+  assert.equal(summary.stage, 'gpu-wait');
+  assert.equal(summary.initializerName, 'W2');
+  assert.equal(summary.destinationOffset, 8);
+  assert.equal(summary.loadedInitializerCount, 2);
+  assert.equal(summary.gpuRequestedCurrent, 80);
+  assert.equal(summary.storage.rangeReadBytes, 80);
+  // Journals written before this change numbered ring slots by recordCount; they still read.
+  const legacy = journalStore();
+  legacy.values.set('run:old', { schemaVersion: 4, storageFormat: 'incremental-v1', runId: 'old', startedAt: 1, environment: {} });
+  legacy.values.set('journal:old:head', { kind: 'head', status: 'running', recordCount: 2, persistence: { mode: 'compact' } });
+  legacy.values.set('journal:old:event:1', { kind: 'event', sequence: 1, value: { stage: 'load-start' } });
+  legacy.values.set('journal:old:event:2', { kind: 'event', sequence: 2, value: { stage: 'gpu-wait' } });
+  const old = await readRun('old', legacy);
+  assert.equal(old.last.stage, 'gpu-wait');
+  assert.equal(old.records.length, 2);
+  assert.ok(old.persistence.note);
+});
+
+test('stop labels name the tester\'s stop and the rows an evaluation finished', async () => {
+  const store = journalStore();
+  const run = new RunDiagnostics('stopped', {}, undefined, { persistBatch: entries => store.persistBatch(entries) });
+  await run.checkpoint({ stage: 'row-complete', row: 1, nTok: 3, result: { totalMs: 9 } });
+  await run.finish('cancelled', { error: 'AbortError: The operation was aborted.', stopSource: 'user-stop', completedRows: 1 });
+  const recovered = await readRun('stopped', store);
+  const summary = diagnosticSummary(recovered);
+  assert.equal(summary.stopSource, 'user-stop');
+  assert.equal(summary.completedRows, 1);
+  assert.equal(stopLabel(summary), '사용자 정지 · 1행 완료');
+  assert.equal(stopLabel(diagnosticSummary({ status: 'cancelled', last: { stage: 'user-cancelled' } })), '사용자 정지');
+  // Older cancelled journals carry no stop source; their rows still count.
+  const older = diagnosticSummary({ status: 'cancelled', last: { stage: 'cancelled' }, milestones: { 'evaluation-rows': { rows: 100 } },
+    rows: [{ row: 1 }, { row: 2 }], summary: { completedRows: undefined } });
+  assert.equal(older.stopSource, null);
+  assert.equal(stopLabel(older), '중단됨 (정지 출처 미기록) · 2행 완료');
+  // A stopped load or probe has no evaluation rows to count.
+  assert.equal(diagnosticSummary({ status: 'cancelled', last: { stage: 'user-cancelled' }, rows: [] }).completedRows, null);
+  assert.equal(stopLabel(null), '중단됨 (정지 출처 미기록)');
 });
 
 test('oversized recent records are bounded without losing the durable latest position or original fault', async () => {
@@ -233,7 +310,7 @@ test('run journals serialize persistence, isolate IDs and retain a GPU fault aft
     await Promise.resolve(); saved.set(key, structuredClone(state)); pending = false;
   };
   const run = snapshotRun('one', { browser: 'test' }, persist);
-  await Promise.all(Array.from({ length: 70 }, (_, i) => run.checkpoint({ stage: 'range-read', destinationOffset: i })));
+  await Promise.all(Array.from({ length: 70 }, (_, i) => run.checkpoint({ stage: 'initializer-complete', destinationOffset: i })));
   await run.checkpoint({ stage: 'device-lost', metrics: { deviceLost: { reason: 'unknown' } } });
   await run.checkpoint({ stage: 'gpu-uncaptured-error', message: 'later cleanup error' });
   await run.finish('failed', { stage: 'session-create-failed' });
