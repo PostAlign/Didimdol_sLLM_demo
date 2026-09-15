@@ -52,7 +52,10 @@ export class SessionRangeLoader {
   // September 14 phone). They exist to hold the crash position durably before a
   // read, write or wait, so they carry the position and the progress counters
   // only; `allocate-initializer` and `initializer-complete` keep the full
-  // metrics, ledger and storage snapshots. The journal keeps these position
+  // metrics, ledger and storage snapshots, minus the ledger's last sixteen
+  // allocations: on the September 14 phone those were 3.4 KB of every 5.2 KB
+  // ring record and 1.6 MB of a 3.95 MB load journal, while the milestones and
+  // the terminal summary still carry them. The journal keeps the position
   // records out of its event ring as well (see RunDiagnostics).
   static POSITION_STAGES = new Set(['upload-initializer', 'range-read', 'gpu-write', 'gpu-wait']);
   static POSITION_METRICS = ['gpuWeightAllocated', 'gpuWeightUploaded', 'gpuWriteReturnedBytes', 'gpuQueueCompletedBytes',
@@ -64,6 +67,11 @@ export class SessionRangeLoader {
       ...(tracking ? { tracking: { status: tracking.status, activeDeviceId: tracking.activeDeviceId, deviceCount: tracking.deviceCount } } : {}),
       recentAllocationsOmitted: recentAllocations?.length ?? 0, positionRecord: true };
   }
+  static ringLedger(ledger) {
+    if (!ledger?.recentAllocations) return ledger;
+    const { recentAllocations, ...rest } = ledger;
+    return { ...rest, recentAllocationsOmitted: recentAllocations.length };
+  }
   async record(stage, details = {}) {
     const position = SessionRangeLoader.POSITION_STAGES.has(stage);
     const metrics = this.sampleMetrics();
@@ -74,7 +82,7 @@ export class SessionRangeLoader {
       return;
     }
     const storage = this.storage();
-    await this.checkpoint({ ...this.last, ...details, stage, metrics, gpuLedger: this.gpuLedger(),
+    await this.checkpoint({ ...this.last, ...details, stage, metrics, gpuLedger: SessionRangeLoader.ringLedger(this.gpuLedger()),
       ...(storage ? { storage: { ...storage } } : {}) });
   }
   check() {

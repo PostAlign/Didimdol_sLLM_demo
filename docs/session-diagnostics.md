@@ -520,6 +520,121 @@ Still owed from the phone: the `.ips` files for the four resident interruptions
 `outputBuffers=2` against `outputBuffers=1` on this commit, a load export to
 confirm the journal size, and then the two 100-row streamed evaluations.
 
+## September 14 evening exports (release `8a6116bb9a49`, commit `225f1bb`)
+
+Same iPhone, Chrome 153, Asyncify, nine OPFS cache hits in every run, no
+persisted GPU fault, no device loss, `compact` diagnostics, 8 MiB staging and
+streamed scratch, 30 s repeat delay. This build projected the streamed output
+with two buffers by default. The evaluation page was opened without parameters
+(streamed, two buffers) and exported once (`didimdol-diagnostics (13)`), the
+experiment page three times (`iphone-fp32-experiments (70)`–`(72)`, each a
+prefix of the next). No device file was collected in this session.
+
+| KST | Screen / experiment | Outcome |
+|---|---|---|
+| 21:36:47 | Evaluation page session create, streamed 8 MiB, 2 buffers | 235/235, 383 MiB weights, `ready` in 11.1 s; load journal 2,315 entries, 3.95 MB |
+| 21:36:59–21:44:03 | Evaluation page 100-row evaluation, streamed, 2 buffers | **rows 1–5 complete in 421 s** (317 s in the morning with one buffer); stopped by the tester in row 6 after its first token, recorded as `stopSource: user-stop`, `completedRows: 5`, status `cancelled` |
+| 21:44:52 | 5 short inference, streamed, 2 buffers | load `ready` in 10.3 s; **interrupted 22 tokens into the first prompt** (21:45:25, 728 ms per token), 471 MiB requested; a `pagehide` with `persisted: true` and a hidden `visibilitychange` 7 ms apart, 0.5 s after the last checkpoint; page back 14 s later |
+| 21:45:39 | 5 short inference, streamed, 2 buffers | complete in 59.7 s, 32 tokens × 2 (27.9 s, 24.6 s), peak 538 MiB |
+| 21:49:13 | 5 short inference, resident | load `ready` in 14.6 s, first token at 435 ms, **interrupted 1.0 s after `probe-inference-start`** (three samples), 1,036 MiB requested, no unload event |
+| 21:50:30 | 5 short inference, streamed, `outputBuffers=1` | complete in 48.1 s, 32 tokens × 2 (22.3 s, 17.4 s), peak 522 MiB |
+
+The three probes and the morning probe generated identical token sequences, and
+rows 4 and 5 of the evaluation scored the same ROUGE as in the morning (0.393,
+0.320), so the second buffer changed nothing but time.
+
+Streaming totals of the 64-projection probes:
+
+| | Morning, 1 buffer | Evening, 2 buffers | Evening, 1 buffer |
+|---|---:|---:|---:|
+| Probe | 47.9 s | 59.7 s | 48.1 s |
+| `projectionMs` (output loop wall) | — | 39.9 s | 30.0 s |
+| `uploadMs` | 20.5 s | 38.7 s | 20.0 s |
+| `outputReadMs` | 12.1 s | 19.0 s | 11.4 s |
+| `queueWaitMs` | 1.5 s | 7.9 s | 1.7 s |
+| `outputComputeMs` | 9.6 s | 34.7 s | 10.0 s |
+
+Evaluation rows, both with `eos`:
+
+| Row | Prompt | Tokens | ms per token (morning) | TTFT (morning) | ROUGE-1 F1 |
+|---|---|---|---|---|---|
+| 4 | 217 | 71 | 703 (516) | 1,160 (1,168) | 0.393 |
+| 5 | 50 | 137 | 678 (526) | 878 (828) | 0.320 |
+
+With one buffer `uploadMs + outputComputeMs` equals `projectionMs` exactly
+(20.0 + 10.0 = 30.0 s): 19.5 ms of upload and 9.8 ms of projection per 40 MiB
+chunk. With two buffers both intervals span nearly the whole chunk period, so
+the overlap did happen, but the period grew from 29 ms to 39 ms per chunk. The
+OPFS reads themselves took 67% longer for the same bytes, the queue wait 4.5×,
+and the compute interval 3.5× (mostly waiting, since the GPU work per chunk is
+unchanged). Three mechanisms in that loop fit the numbers: the upload of chunk
+*i+1* called `onSubmittedWorkDone`, which now waited for projection *i* as
+well; the readback of chunk *i* (`getData`, a copy plus `mapAsync` on the same
+in-order queue) was submitted after the 40 MiB of `writeBuffer` calls for chunk
+*i+1* and therefore waited behind them, serialising compute(i), blit(i+1),
+readback(i), compute(i+1) with no gain; and the synchronous OPFS reads and
+`writeBuffer` copies competed with the GPU process's blit and the
+bandwidth-bound M=1 Gemm for memory bandwidth. The error scopes are not the
+cause: the serial path on the same build matched the morning (48.1 s against
+47.9 s). TTFT did not change, so prefill is unaffected.
+
+The interruptions differ. The evaluation stop is a tester stop (`user-stop`,
+five rows). The resident probe is the fifth resident interruption in a row
+(07:35, 17:40, 23:15 on September 13, 08:07 and 21:49 on September 14), this
+time after a first token in 435 ms and about 250 ms per token, with no unload
+event, which matches a process termination. The streamed probe at 21:44 is the
+first interruption with an unload event: `pagehide` with `persisted: true` and
+a hidden `visibilitychange` in the same moment, half a second after a
+checkpoint, which matches the page leaving the foreground (an app switch,
+lock screen or tab change) and a background discard before it was reopened 14 s
+later, not a crash in the foreground. Whether the tester left the app at
+21:45:25 is unconfirmed.
+
+Journal traffic: the load journal was 2,315 entries and 3.95 MB (3,255 and
+6.3 MB the morning before). Every `allocate-initializer` and
+`initializer-complete` ring record carried the ledger's 16 `recentAllocations`
+(3.4 KB of its 5.2 KB), 1.6 MB of the total. The evaluation run wrote 415
+entries (0.8 MB) in 7 minutes and the eight experiment runs 10,012 entries
+(16.9 MB) against 73,708 (153 MB) for the morning's 24.
+
+Changes in this commit:
+
+- **One output buffer by default.** `DEFAULT_OUTPUT_BUFFERS` is 1 in the
+  worker, the evaluation URL (`outputBuffers=2` selects the overlap) and the
+  experiment page; the release-independent stored choice on the phone still
+  applies.
+- **Reordered overlap.** With two buffers the loop calls `getData()` as soon as
+  `run()` returns, so the readback copy is queued before the next chunk's
+  writes (the runtime's downloader encodes and submits synchronously), and
+  only then starts the next upload, which skips its queue wait
+  (`upload(index, { queueWait: false })`): the following readback bounds the
+  backlog and the buffer being rewritten held a projection already read back.
+  The serial path drops the duplicate wait after the readback, which the
+  in-order queue makes redundant.
+- **Chunk timelines.** The first two projections of a session record every
+  chunk's `runSubmit`, `runResolved`, `readbackSubmit`, `readbackResolved`,
+  `uploadStart`, `uploadEnd`, `readMs` and `waitMs` (ms from the loop start);
+  the next `streamed-step-complete` carries them as `chunkTimelines`, about
+  1.5 KB each. Evaluations, which checkpoint every eight tokens, get both on
+  their first checkpoint.
+- **Ring ledger.** `allocate-initializer` and `initializer-complete` records
+  drop `recentAllocations` (`recentAllocationsOmitted` counts it) like the
+  position records; milestones and the terminal summary keep the list.
+  Expected: about 2.3 MB per full load.
+- **Unload kind.** Recovery records `unloadKind`: `persisted-hide` when a
+  `pagehide` with `persisted: true` fell inside the run, `unload` for other
+  navigation or reload events; both pages label it and show the re-entry gap
+  and navigation type alongside.
+- **Browser test.** `npm run test:streamed` runs the streamed probe with one
+  and two buffers and checks identical tokens, the queue-wait counts and the
+  timelines.
+
+Still owed from the phone: a streamed probe and a `rowLimit=10` evaluation with
+`outputBuffers=2` on this commit against the one-buffer defaults, with their
+`chunkTimelines`; the `.ips` files for the 21:49 resident interruption and the
+21:45 streamed one; whether the tester left the app at 21:45:25; a load export
+to confirm the journal size; and then the two 100-row streamed evaluations.
+
 ## Experiment 1d: small ORT session plus stored-weight residency
 
 `runtime-resident` runs through the application worker, under the same origin
@@ -587,8 +702,10 @@ fault remain separately available. Pre-call position records (`upload-initialize
 `resident-wait`) update the head's `last` only and take no ring slot, so the
 ring holds the allocation and completion of about 32 initializers rather than
 the pieces of the last ten; ring slots are numbered by `eventCount`, and
-journals numbered by `recordCount` still read. Initializer order is capped at
-2,048 entries.
+journals numbered by `recordCount` still read. The allocation and completion
+records carry the full metrics and storage snapshot but not the ledger's
+`recentAllocations` list (`recentAllocationsOmitted` counts it); milestones
+and the terminal summary keep it. Initializer order is capped at 2,048 entries.
 Terminal summaries are stored once rather than repeated in recent events.
 `readRun()` reconstructs the usual export shape and also reads schema 2/3 files
 and snapshot records. Cleanup metadata uses a separate key so it does not replace

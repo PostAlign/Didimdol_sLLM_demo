@@ -333,10 +333,10 @@ match no row are still kept in the export (`deviceReports`) with whether they fa
 the span of the runs.
 
 On iOS the acceptance path is the streamed one. Resident inference is diagnostic only: in
-three September 13 sessions and the September 14 morning session every resident inference
-ended within a second of its first prompt at about 1,037 MiB requested (the last one before
-its first token), and the one with a same-minute Jetsam report was a `highwater` kill at
-2,284 MiB of WebContent footprint. The experiment page warns when that combination is
+three September 13 sessions and both September 14 sessions every resident inference
+ended within a second of its first prompt at about 1,037 MiB requested (the evening one
+after its first token at 435 ms), and the one with a same-minute Jetsam report was a
+`highwater` kill at 2,284 MiB of WebContent footprint. The experiment page warns when that combination is
 selected on iOS. The evaluation page streams by default on iOS (`modelExecution=streamed`
 unless the URL says otherwise) and the experiment page defaults to streamed execution with
 a 30 s repeat delay. Streamed loads and probes have completed in every session with a
@@ -346,12 +346,15 @@ all five resident repeats completed.
 
 Streamed throughput on the September 14 phone was about 2.0 tokens/s at 8 MiB staging with
 one output buffer (about 500 ms per token, 61 s per evaluation row, about 100 minutes per
-100-row pass; 1.5 tokens/s the night before at 2 MiB). This commit projects the output with
-two buffers so the next chunk's OPFS read overlaps the previous chunk's projection;
-`outputBuffers=1` on the evaluation URL or the experiment page keeps the serial path for
-comparison, and the phone measurement of the difference is still owed. The evaluation page
-accepts `rowLimit=N` to time a prefix of the rows; such a run is labelled a partial
-evaluation and is not acceptance. See docs/session-diagnostics.md.
+100-row pass; 1.5 tokens/s the night before at 2 MiB). Projecting with two buffers so the
+next chunk's OPFS read overlaps the previous chunk's projection was measured that evening
+and cost 30-36% per token (703 and 678 ms on rows 4 and 5, a 59.7 s probe against 48.1 s
+with one buffer in the same session), so one buffer is the default everywhere and
+`outputBuffers=2` on the evaluation URL or the experiment page is the comparison. The
+overlapped loop now submits each chunk's readback before the next chunk's writes; its
+phone measurement is still owed. The evaluation page accepts `rowLimit=N` to time a prefix
+of the rows; such a run is labelled a partial evaluation and is not acceptance. See
+docs/session-diagnostics.md.
 
 If the residency-only test fails, source/scratch improvements cannot guarantee success.
 Splitting into simultaneously resident sessions does not reduce the 1,023 MiB weight total.

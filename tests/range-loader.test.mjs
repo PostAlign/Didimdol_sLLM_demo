@@ -143,7 +143,13 @@ test('position records carry a slim ledger with tracking status and omit recent 
   const position = records.find(r => r.stage === 'gpu-wait');
   assert.deepEqual(position.gpuLedger, { requestedCurrent: 16, observedPeak: 16, liveBufferCount: 1, bufferCount: 1, deviceLost: null, lastError: null,
     tracking: { status: 'complete', activeDeviceId: 1, deviceCount: 1 }, recentAllocationsOmitted: 2, positionRecord: true });
-  assert.equal(records.find(r => r.stage === 'initializer-complete').gpuLedger.recentAllocations.length, 2, 'full records keep the list');
+  const complete = records.find(r => r.stage === 'initializer-complete').gpuLedger;
+  assert.equal(complete.recentAllocations, undefined, 'ring records drop the allocation list');
+  assert.equal(complete.recentAllocationsOmitted, 2);
+  assert.deepEqual(complete.categories, [{ role: 'weight' }], 'ring records keep the category totals');
+  assert.deepEqual(complete.tracking.devices, [{ id: 1, fullHistory: true }]);
+  assert.equal(SessionRangeLoader.ringLedger(null), null);
+  assert.deepEqual(SessionRangeLoader.ringLedger({ requestedCurrent: 4 }), { requestedCurrent: 4 });
   assert.equal(SessionRangeLoader.positionLedger(null), null);
   assert.equal(SessionRangeLoader.positionLedger({ requestedCurrent: 4 }).recentAllocationsOmitted, 0);
 });

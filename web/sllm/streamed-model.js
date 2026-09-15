@@ -1,5 +1,8 @@
 import { StreamedWeights } from './streamed-weights.js';
 
+/** Projections per session whose chunks are timed individually (about 1.5 KB each). */
+export const TIMELINE_PROJECTIONS = 2;
+
 export function bodyManifest(source, descriptor) {
   if (descriptor.format !== 'didimdol-streamed-fp32-v1' || descriptor.sourceGraphSha256 !== source.graphSha256 ||
       descriptor.sourceRevision !== source.revision) throw new Error('Streamed model/source mismatch');
@@ -39,6 +42,8 @@ export class StreamedSession {
     // Inference samples already carry the streaming totals every few seconds, so
     // a 100-row evaluation does not need one IndexedDB transaction per token.
     this.stepCheckpointEvery = stepCheckpointEvery;
+    // Per-chunk timelines of the first projections, attached to the next checkpoint.
+    this.timelines = [];
     this.weights = new StreamedWeights({ ort, device: tracker.device, tracker, store, manifest, descriptor, signal, scratchBytes, outputBuffers });
     this.inputNames = [...new Set(['input_ids', ...body.inputNames.filter(name => name !== 'streamed_embeddings')])];
     this.inputMetadata = this.inputNames.map(name => body.inputMetadata.find(value => value.name === name) ||
@@ -62,28 +67,46 @@ export class StreamedSession {
       const logits = new Float32Array(this.descriptor.vocabSize);
       const chunks = this.descriptor.chunks.length, overlap = this.weights.buffers.length > 1;
       const projectionStart = performance.now();
-      await this.weights.upload(0);
+      // The first projections of a session keep a per-chunk timeline (run
+      // submit and return, readback submit and completion, upload span) so a
+      // phone export shows where an overlapped chunk waits. Later projections
+      // carry the totals only; the timelines ride on the next checkpoint.
+      const timeline = this.weights.metrics.projections < TIMELINE_PROJECTIONS ? [] : null;
+      const ms = value => Math.round(value * 10) / 10;
+      const entry = i => timeline && (timeline[i] ||= { chunk: i, slot: this.weights.slot(i) });
+      const mark = (i, name) => { const e = entry(i); if (e) e[name] = ms(performance.now() - projectionStart); };
+      const uploaded = (i, timing) => {
+        const e = entry(i);
+        if (e) Object.assign(e, { uploadStart: ms(timing.start - projectionStart), uploadEnd: ms(timing.end - projectionStart), readMs: ms(timing.readMs), waitMs: ms(timing.waitMs) });
+        return null;
+      };
+      uploaded(0, await this.weights.upload(0));
       for (let i = 0; i < chunks; i++) {
         this.weights.check();
         const slot = this.weights.slot(i);
         this.weights.computing = { chunk: i, slot };
         this.weights.position = { operation: 'output-compute', chunk: i, slot };
         const computeStart = performance.now();
+        mark(i, 'runSubmit');
         const pending = this.head.run({ hidden, weight: this.weights.tensors[slot] });
-        // With two buffers the next chunk is read from OPFS and queued into the
-        // other buffer while this projection runs on the GPU. The macrotask
-        // yield lets the runtime submit its dispatch before the synchronous
-        // OPFS reads occupy the thread. That buffer's previous projection has
-        // already been read back below, so the rewrite cannot overtake it.
-        const next = i + 1 < chunks && overlap
-          ? new Promise(resolve => setTimeout(resolve, 0)).then(() => this.weights.upload(i + 1)).then(() => null, error => error) : null;
-        let result, failure;
+        let result, failure, next = null;
         try {
           result = await pending;
-          const values = await result.chunk_logits.getData();
+          mark(i, 'runResolved');
+          // `getData()` submits the readback copy synchronously (the runtime's
+          // downloader encodes copyBufferToBuffer and submits before awaiting
+          // mapAsync), so it is issued before the next chunk's writes. With two
+          // buffers the next chunk is then read from OPFS and written into the
+          // other buffer while this projection and its readback run on the GPU;
+          // the queue order stays compute(i), readback(i), writes(i+1), so the
+          // readback never waits behind a 40 MiB upload. The buffer being
+          // rewritten held projection i-1, whose readback completed below.
+          const download = result.chunk_logits.getData();
+          mark(i, 'readbackSubmit');
+          if (overlap && i + 1 < chunks) next = this.weights.upload(i + 1, { queueWait: false }).then(timing => uploaded(i + 1, timing), error => error);
+          const values = await download;
+          mark(i, 'readbackResolved');
           logits.set(values, i * this.descriptor.chunkRows);
-          // One buffer: no overwrite of the shared weight buffer before this projection finishes.
-          if (!overlap) await this.weights.device.queue.onSubmittedWorkDone();
         } catch (error) { failure = error; }
         finally { result?.chunk_logits.dispose(); }
         this.weights.metrics.outputComputeMs += performance.now() - computeStart;
@@ -92,16 +115,20 @@ export class StreamedSession {
         const uploadFailure = next ? await next : null;
         if (failure) throw failure;
         if (uploadFailure) throw uploadFailure;
-        if (!next && i + 1 < chunks) await this.weights.upload(i + 1);
+        // One buffer: the readback above completed after this projection in the
+        // in-order queue, and the upload's own queue wait follows the rewrite.
+        if (!overlap && i + 1 < chunks) uploaded(i + 1, await this.weights.upload(i + 1));
       }
       this.weights.computing = null;
       this.weights.metrics.projectionMs += performance.now() - projectionStart;
       this.weights.check();
       this.weights.metrics.projections++;
+      if (timeline) this.timelines.push({ projection: this.weights.metrics.projections, outputBuffers: this.weights.buffers.length, chunks: timeline });
       const every = Math.max(1, Math.floor(this.stepCheckpointEvery) || 1);
       if (this.weights.metrics.projections % every === 0) {
         await this.checkpoint({ stage: 'streamed-step-complete', durationMs: performance.now() - start,
-          stepCheckpointEvery: every, streaming: { ...this.weights.metrics } });
+          stepCheckpointEvery: every, streaming: { ...this.weights.metrics },
+          ...(this.timelines.length ? { chunkTimelines: this.timelines.splice(0) } : {}) });
       }
       hidden.dispose(); delete outputs[this.descriptor.hiddenOutput];
       outputs.logits = new this.ort.Tensor('float32', logits, [1, 1, this.descriptor.vocabSize]);

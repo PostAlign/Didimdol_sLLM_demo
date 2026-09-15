@@ -34,17 +34,21 @@ try {
       await route.fulfill({ status: 302, headers: { 'Access-Control-Allow-Origin': '*', location: `${origin}/.work/full-model/${name}` }, body: '' });
     } else await route.continue();
   });
-  for (const execution of (process.env.MODEL_EXECUTIONS ?? 'resident,streamed').split(',').filter(Boolean)) {
+  // Streamed runs once per output buffer count: 1 is the default serial path, 2 the overlapped comparison.
+  const plans = (process.env.MODEL_EXECUTIONS ?? 'resident,streamed').split(',').filter(Boolean).flatMap(execution => execution === 'streamed'
+    ? (process.env.STREAMED_OUTPUT_BUFFERS ?? '1,2').split(',').map(Number).map(outputBuffers => ({ execution, outputBuffers })) : [{ execution, outputBuffers: undefined }]);
+  for (const { execution, outputBuffers } of plans) {
     const page = await context.newPage();
     page.on('console', message => console.log(message.text()));
     await page.goto(`${origin}/__test`);
     const cdp = await context.newCDPSession(page);
     await cdp.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 8 * 2**30 });
-    const result = await page.evaluate(async ({ execution, tokens, mode }) => {
+    const result = await page.evaluate(async ({ execution, outputBuffers, tokens, mode }) => {
       const { asset, build } = await (await import('/web/sllm/ort-runtime.js')).runtimeRelease();
       const url = new URL(asset('web/sllm/worker.js')); url.searchParams.set('ortMode', mode);
       const worker = new Worker(url, { type: 'module' });
       const loadId = crypto.randomUUID(); let probeId = crypto.randomUUID();
+      const firstProbeId = probeId;
       let session, probe, firstProbe, probing = false;
       return await new Promise((resolve, reject) => {
         const progress = setInterval(async () => {
@@ -56,7 +60,7 @@ try {
         worker.onerror = event => { clearTimeout(timeout); worker.terminate(); reject(new Error(event.message)); };
         worker.onmessage = async ({ data }) => {
           if (['phase', 'ready', 'session-result'].includes(data.type)) console.log(execution, data.type, data.text || data.result?.stage || '');
-          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', runId: loadId,
+          if (data.type === 'worker-ready') worker.postMessage({ type: 'load', device: 'webgpu', runId: loadId, outputBuffers,
             environment: { modelExecution: execution, tokenizerFormat: 'prepared' } });
           if (data.type === 'session-result') session = data.result;
           if (data.type === 'ready') { probing = true; worker.postMessage({ type: 'probe', runId: probeId, maxNewTokens: tokens }); }
@@ -72,7 +76,9 @@ try {
             clearTimeout(timeout); clearInterval(progress); worker.terminate();
             const { readRun } = await import('/web/sllm/diagnostics.js');
             const run = await readRun(probeId);
-            resolve({ execution, mode, releaseId: build.releaseId, session, probe, firstProbe, cleanup: data.cleanup, steps: run.records.filter(x => x.stage === 'streamed-step-complete'),
+            const first = firstProbeId === probeId ? run : await readRun(firstProbeId);
+            resolve({ execution, outputBuffers, mode, releaseId: build.releaseId, session, probe, firstProbe, cleanup: data.cleanup, steps: run.records.filter(x => x.stage === 'streamed-step-complete'),
+              firstSteps: first.records.filter(x => x.stage === 'streamed-step-complete'),
               samples: run.records.filter(x => x.stage === 'inference-sample').map(({ reason, phase, row, inferenceElapsedMs, sampleIndex, gpuLedger, metrics }) =>
                 ({ reason, phase, row, inferenceElapsedMs, sampleIndex, gpuRequestedCurrent: gpuLedger?.requestedCurrent ?? null,
                   computePipelines: gpuLedger?.programs?.computePipelines ?? null, wasmHeapBytes: metrics?.wasmHeapBytes ?? null })),
@@ -80,7 +86,7 @@ try {
           }
         };
       });
-    }, { execution, tokens: Number(process.env.STREAMED_TEST_TOKENS || 2), mode: process.env.ORT_MODE || 'asyncify' });
+    }, { execution, outputBuffers, tokens: Number(process.env.STREAMED_TEST_TOKENS || 2), mode: process.env.ORT_MODE || 'asyncify' });
     results.push(result);
     assert.equal(result.probe.success, true);
     assert.equal(result.cleanup.success, true);
@@ -96,18 +102,30 @@ try {
     console.log(JSON.stringify({ execution, inference, sampleReasons: result.samples.map(sample => sample.reason) }));
     if (execution === 'streamed') {
       assert.equal(result.session.metrics.gpuWeightAllocated, 401304064);
-      // Two 40 MiB output buffers by default: the next chunk is read while the previous one is projected.
-      assert.equal(result.session.outputBuffers, 2);
-      assert.equal(result.session.streaming.gpuBufferBytes, 2 * 41943040);
-      assert.equal(result.session.streaming.gpuBufferCount, 2);
+      // One 40 MiB output buffer by default (serial); `outputBuffers: 2` reads the next chunk while the previous one is projected.
+      const buffers = outputBuffers ?? 1;
+      assert.equal(result.session.outputBuffers, buffers);
+      assert.equal(result.session.streaming.gpuBufferBytes, buffers * 41943040);
+      assert.equal(result.session.streaming.gpuBufferCount, buffers);
       assert.equal(result.session.gpuLedger.tracking.deviceCount, 1);
       const categories = Object.fromEntries(result.probe.gpuLedger.categories.map(value => [value.role, value]));
-      assert.equal(categories['streamed-weight'].createdCount, 2);
-      assert.equal(categories['streamed-weight'].requestedCurrent, 2 * 41943040);
+      assert.equal(categories['streamed-weight'].createdCount, buffers);
+      assert.equal(categories['streamed-weight'].requestedCurrent, buffers * 41943040);
       const streaming = result.steps.at(-1).streaming;
-      assert.ok(streaming.projectionMs > 0 && streaming.projectionMs <= streaming.uploadMs + streaming.outputComputeMs + 1,
+      // The loop's bookkeeping between the timed spans (checks, position and timeline marks) is under 2 ms per chunk on SwiftShader.
+      assert.ok(streaming.projectionMs > 0 && streaming.projectionMs <= streaming.uploadMs + streaming.outputComputeMs + 2 * streaming.chunks,
         `projection wall time ${streaming.projectionMs} is bounded by the overlapped parts ${streaming.uploadMs} + ${streaming.outputComputeMs}`);
+      // With two buffers the loop skips the per-chunk queue wait; the first chunk of each projection still waits.
+      assert.equal(streaming.queueWaits, buffers === 1 ? streaming.chunks : streaming.projections);
+      // The first two projections of the session (in the first probe's journal) carry a per-chunk timeline on the next checkpoint; later ones do not.
+      const timelines = result.firstSteps.flatMap(step => step.chunkTimelines ?? []);
+      assert.deepEqual(timelines.map(t => t.projection), [1, 2]);
+      assert.ok(timelines.every(t => t.outputBuffers === buffers && t.chunks.length === 16 &&
+        t.chunks.every((c, i) => c.chunk === i && c.slot === i % buffers && c.readbackResolved >= c.readbackSubmit && c.uploadEnd >= c.uploadStart)));
+      assert.ok(result.firstSteps.slice(2).every(step => !step.chunkTimelines) && result.steps.every(step => !step.chunkTimelines), 'later checkpoints carry totals only');
       assert.deepEqual(result.probe.outputs.map(x => x.tokens), result.firstProbe.outputs.map(x => x.tokens));
+      const serial = results.find(value => value.execution === 'streamed' && value !== result);
+      if (serial) assert.deepEqual(result.probe.outputs.map(x => x.tokens), serial.probe.outputs.map(x => x.tokens), 'one and two buffers produce the same tokens');
       assert.ok(result.probe.gpuLedger.requestedCurrent <= result.firstProbe.gpuLedger.requestedCurrent + 2**20,
         'repeating the same prompts must not accumulate GPU allocations');
       assert.equal(result.steps.at(-1).streaming.outputReadBytes,
@@ -115,7 +133,7 @@ try {
       const resident = results.find(value => value.execution === 'resident');
       if (resident) assert.deepEqual(result.probe.outputs.map(x => x.tokens), resident.probe.outputs.map(x => x.tokens));
     }
-    console.log(JSON.stringify({ execution, outputs: result.probe.outputs,
+    console.log(JSON.stringify({ execution, outputBuffers, outputs: result.probe.outputs,
       gpuPeak: result.probe.gpuLedger.requestedPeak, streaming: result.steps.at(-1)?.streaming }));
     await page.close();
   }

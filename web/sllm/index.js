@@ -226,7 +226,9 @@ export function initSllm(root) {
       `이전 실행 중단 — ${run?.fault ? '오류 기록 있음' : '원인 미확인'}. 지난 ${activity}(${when} 시작)이 도중에 끝났습니다. `
       + (recovery?.unloadEvidence === 'no-unload-event'
         ? `${unloadLabel(recovery)}. 브라우저/GPU 프로세스 종료와 일치하지만, 메모리 부족은 같은 시각의 기기 기록으로만 확정됩니다. `
-        : recovery?.unloadEvidence === 'unload-observed' ? `${unloadLabel(recovery)}. 페이지 이동·새로고침이 원인일 수 있으며, 메모리 부족은 확인되지 않았습니다. `
+        : recovery?.unloadEvidence === 'unload-observed' ? `${unloadLabel(recovery)}. ${recovery.unloadKind === 'persisted-hide'
+          ? '앱 전환·화면 잠금·탭 이동으로 가려진 페이지는 백그라운드에서 정리될 수 있으며, 메모리 부족은 확인되지 않았습니다. '
+          : '페이지 이동·새로고침이 원인일 수 있으며, 메모리 부족은 확인되지 않았습니다. '}`
         : '페이지 이동·새로고침 또는 브라우저/GPU 종료 가능성이 있으며, 메모리 부족은 아직 확인되지 않았습니다. ')
       + '검증·저장이 완료된 가중치 파일은 다시 사용합니다. 진단 기록을 저장해 주세요.'
       + (checkpoint ? ` 마지막 기록: ${summary?.observedDuring || checkpoint.stage} · ${summary?.file || checkpoint.initializerName || ''}` : '')
@@ -251,8 +253,9 @@ export function initSllm(root) {
   const runtimeOptions = new URLSearchParams(location.search);
   workerURL.searchParams.set('ortMode', runtimeOptions.get('ortMode') || 'asyncify');
   const stagingMiB = Number(runtimeOptions.get('stagingMiB') || 8);
-  // `outputBuffers=1` serializes the streamed output projection (the September 13 path) for comparison; 2 overlaps it.
-  const outputBuffers = Number(runtimeOptions.get('outputBuffers')) === 1 ? 1 : 2;
+  // `outputBuffers=2` overlaps the next chunk's read with the streamed output projection; on the September 14 phone it
+  // cost 30-36% per token, so the serial single buffer is the default and 2 is the comparison.
+  const outputBuffers = Number(runtimeOptions.get('outputBuffers')) === 2 ? 2 : 1;
   workerURL.searchParams.set('diagnosticsMode', runtimeOptions.get('diagnosticsMode') || 'compact');
   workerURL.searchParams.set('tokenizerFormat', runtimeOptions.get('tokenizerFormat') || 'json');
   // iOS 는 URL 이 정하지 않으면 가중치 순차 로딩(streamed)이다. 9월 13일 실기기 세션에서 전체

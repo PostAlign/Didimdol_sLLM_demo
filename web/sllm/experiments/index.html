@@ -21,8 +21,8 @@
 <label>런타임 <select id="mode" disabled><option value="asyncify">Asyncify (기본)</option><option value="jspi">JSPI (지원 기기만)</option></select></label>
 <label>모델 실행 <select id="modelExecution" disabled><option value="resident">전체 가중치 유지 (기존)</option><option value="streamed">가중치 순차 로딩 (FP32 · iOS 기본)</option></select></label>
 <label>전송 크기 <select id="staging" disabled><option value="8">8 MiB (기본)</option><option value="4">4 MiB</option><option value="2">2 MiB</option></select></label>
-<label>순차 로딩 출력 버퍼 <select id="outputBuffers" disabled><option value="2">2개 · 다음 청크 읽기와 계산 겹침 (기본)</option><option value="1">1개 · 읽기 뒤 계산 (9월 13일 방식 · 비교용)</option></select></label>
-<p id="residentNote" hidden>전체 가중치 유지 추론은 iOS 실기기에서 9월 13~14일 네 세션 모두 첫 토큰 전후에 끝났습니다(GPU 요청 약 1,037 MiB). 이 조합은 진단 전용이며 수용 경로는 순차 로딩입니다. 중단 뒤에는 그 시각의 기기 로그 파일을 넣어 주세요.</p>
+<label>순차 로딩 출력 버퍼 <select id="outputBuffers" disabled><option value="1">1개 · 읽기 뒤 계산 (기본)</option><option value="2">2개 · 다음 청크 읽기와 계산 겹침 (비교용 · 9월 14일 저녁 실기기에서 토큰당 30~36% 느림)</option></select></label>
+<p id="residentNote" hidden>전체 가중치 유지 추론은 iOS 실기기에서 9월 13~14일 다섯 세션 모두 첫 토큰 전후 1초 안에 끝났습니다(GPU 요청 약 1,037 MiB). 이 조합은 진단 전용이며 수용 경로는 순차 로딩입니다. 중단 뒤에는 그 시각의 기기 로그 파일을 넣어 주세요.</p>
 <label>진단 저장 <select id="diagnosticsMode" disabled><option value="compact">변경된 항목만 저장 (기본)</option><option value="snapshot">전체 상태 저장 (비교용 · 실행당 약 1 GB 디스크 쓰기)</option></select></label>
 <label>토크나이저 로더 <select id="tokenizerFormat" disabled><option value="json">기존 JSON (기본)</option><option value="prepared">미리 변환한 데이터 (비교용)</option></select></label>
 <label>2c 세션 유지 관찰 <select id="sessionIdle" disabled><option value="0">관찰 없이 종료 (기본)</option><option value="120">생성 후 120초 유지</option></select></label>

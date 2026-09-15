@@ -1,8 +1,11 @@
 /** OPFS-backed FP32 embedding lookup and reusable output-weight GPU buffers. */
 export const DEFAULT_SCRATCH_BYTES = 8 * 2**20;
-// Two output buffers let the next chunk's OPFS read and writeBuffer run while
-// the GPU projects the current chunk. One buffer serializes them (comparison).
-export const DEFAULT_OUTPUT_BUFFERS = 2;
+// One output buffer serializes each chunk's OPFS read, upload and projection.
+// Two let the next chunk's read and writeBuffer run while the GPU projects the
+// current chunk; on the September 14 phone that overlap cost 30-36% per token
+// (projection wall 39.9 s against 30.0 s per 64 tokens), so it stays optional
+// until the reordered loop in StreamedSession is measured there.
+export const DEFAULT_OUTPUT_BUFFERS = 1;
 export class StreamedWeights {
   constructor({ ort, device, tracker, store, manifest, descriptor, signal, scratchBytes = DEFAULT_SCRATCH_BYTES,
     outputBuffers = DEFAULT_OUTPUT_BUFFERS }) {
@@ -70,13 +73,19 @@ export class StreamedWeights {
    * run while the head session's `run()` is pending on the same device, and a
    * scope held across an `await` could cross one the runtime pushes and pops
    * around its own dispatches.
+   *
+   * `queueWait: false` skips the chunk's queue wait. The overlapped loop uses
+   * it: its writes follow the previous chunk's readback copy in the queue, and
+   * the next projection's readback is the boundary that bounds the backlog, so
+   * a wait here would only stall the thread behind the projection in flight.
+   * Resolves with the chunk's timing for the per-chunk timeline.
    */
-  async upload(index) {
+  async upload(index, { queueWait = true } = {}) {
     this.check();
     const chunk = this.descriptor.chunks[index];
     const buffer = this.buffers[this.slot(index)];
     const start = performance.now();
-    let failure, written = 0;
+    let failure, written = 0, readMs = 0, waitMs = 0;
     const scopes = [];
     try {
       for (let offset = 0; offset < chunk.bytes; offset += this.scratch.length) {
@@ -85,7 +94,7 @@ export class StreamedWeights {
         this.position = { operation: 'output-read', chunk: index, slot: this.slot(index), offset, location: chunk.location };
         const readStart = performance.now();
         await this.store.readRangeInto(this.files.get(chunk.location), chunk.offset + offset, size, data);
-        this.metrics.outputReadMs += performance.now() - readStart;
+        readMs += performance.now() - readStart;
         this.metrics.outputReadBytes += size;
         this.metrics.readCalls++;
         this.check();
@@ -97,11 +106,13 @@ export class StreamedWeights {
         this.metrics.writeCalls++;
         written += size;
       }
-      this.position = { operation: 'output-upload-wait', chunk: index, slot: this.slot(index), offset: written, location: chunk.location };
-      const waitStart = performance.now();
-      await this.device.queue.onSubmittedWorkDone();
-      this.metrics.queueWaitMs += performance.now() - waitStart;
-      this.metrics.queueWaits++;
+      if (queueWait) {
+        this.position = { operation: 'output-upload-wait', chunk: index, slot: this.slot(index), offset: written, location: chunk.location };
+        const waitStart = performance.now();
+        await this.device.queue.onSubmittedWorkDone();
+        waitMs = performance.now() - waitStart;
+        this.metrics.queueWaits++;
+      }
       this.metrics.uploadedBytes += written;
     } catch (error) { failure = error; }
     finally {
@@ -112,9 +123,13 @@ export class StreamedWeights {
         } catch (error) { failure ||= error; }
       }
     }
+    this.metrics.outputReadMs += readMs;
+    this.metrics.queueWaitMs += waitMs;
     if (failure) throw failure;
-    this.metrics.uploadMs += performance.now() - start;
+    const end = performance.now();
+    this.metrics.uploadMs += end - start;
     this.metrics.chunks++;
+    return { start, end, readMs, waitMs };
   }
   dispose() {
     if (this.disposed) return;

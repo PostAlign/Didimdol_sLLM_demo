@@ -19,7 +19,7 @@ const streamedKinds = ['session-only', 'load', 'warm-load', 'probe', 'evaluation
 // Exports without OS/browser versions cannot be compared; the model name is still typed by hand.
 $('device').value = state.device || describeDevice(navigator.userAgent); $('mode').value = state.mode;
 $('staging').value = String(state.stagingMiB || 8);
-$('outputBuffers').value = state.outputBuffers === 1 ? '1' : '2';
+$('outputBuffers').value = state.outputBuffers === 2 ? '2' : '1';
 $('diagnosticsMode').value = state.diagnosticsMode || 'compact';
 $('tokenizerFormat').value = state.tokenizerFormat || 'json';
 $('modelExecution').value = state.modelExecution || (isIOS ? IOS_DEFAULTS.modelExecution : 'resident');
@@ -234,7 +234,7 @@ function cancelRepeatWait() {
 }
 async function begin(config) {
   if (state.active) return;
-  config = { diagnosticsMode: state.diagnosticsMode || 'compact', tokenizerFormat: state.tokenizerFormat || 'json', mode: state.mode, stagingMiB: 8, outputBuffers: 2, inspector: 'unknown', reportedDevice: state.device, ...config };
+  config = { diagnosticsMode: state.diagnosticsMode || 'compact', tokenizerFormat: state.tokenizerFormat || 'json', mode: state.mode, stagingMiB: 8, outputBuffers: 1, inspector: 'unknown', reportedDevice: state.device, ...config };
   config.seriesId ||= newRunId();
   config.requestedRuns ??= config.remaining || 1;
   config.attemptNumber ??= 1;
@@ -330,7 +330,7 @@ $('start').onclick = () => {
   state.diagnosticsMode = $('diagnosticsMode').value;
   state.modelExecution = $('modelExecution').value;
   state.tokenizerFormat = $('tokenizerFormat').value; state.sessionIdle = Number($('sessionIdle').value);
-  state.stagingMiB = Number($('staging').value); state.outputBuffers = Number($('outputBuffers').value) === 1 ? 1 : 2;
+  state.stagingMiB = Number($('staging').value); state.outputBuffers = Number($('outputBuffers').value) === 2 ? 2 : 1;
   state.inspector = $('inspector').value; state.repeats = Number($('repeats').value);
   state.repeatDelay = Number($('repeatDelay').value) || 0;
   const kind = $('kind').value;
@@ -423,7 +423,7 @@ $('export').onclick = async () => {
   });
   const blob = new Blob([JSON.stringify({ schemaVersion: 4, exportedAt: new Date().toISOString(), deviceClock: clock, userAgent: navigator.userAgent,
     screenSettings: { device: state.device, diagnosticsMode: state.diagnosticsMode, tokenizerFormat: state.tokenizerFormat, modelExecution: state.modelExecution,
-      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, outputBuffers: state.outputBuffers ?? 2, inspector: state.inspector, repeats: state.repeats,
+      sessionIdle: state.sessionIdle, mode: state.mode, stagingMiB: state.stagingMiB, outputBuffers: state.outputBuffers ?? 1, inspector: state.inspector, repeats: state.repeats,
       repeatDelay: state.repeatDelay ?? 0 },
     active: state.active, results, series: seriesSummary(results, state.active),
     deviceReports: state.deviceReports || [],

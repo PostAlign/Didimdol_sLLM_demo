@@ -168,6 +168,11 @@ export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
   // recovering page appearing shortly after the last checkpoint, matches a process termination but does not prove an
   // OS memory kill: only device logs can. The original cause therefore stays 'unknown'.
   const unloadObserved = events.some(event => event.event === 'pagehide' || (event.event === 'visibilitychange' && event.visibility === 'hidden'));
+  // A `pagehide` with `persisted: true` means the page was kept (back/forward cache or, on iOS, the app leaving the
+  // foreground) rather than torn down by a navigation or reload; the re-entry then followed a background discard or
+  // a later navigation. It distinguishes the September 14 evening streamed probe from the silent resident re-entries.
+  const unloadKind = !unloadObserved ? null
+    : events.some(event => event.event === 'pagehide' && event.persisted === true) ? 'persisted-hide' : 'unload';
   const reentryGapMs = Number.isFinite(lastTimestamp) && Number.isFinite(observedAt) ? Math.max(0, observedAt - lastTimestamp) : null;
   const unloadEvidence = run.fault ? 'recorded-fault' : !['interrupted', 'cleanup-reentry'].includes(classification) ? null
     : unloadObserved ? 'unload-observed' : 'no-unload-event';
@@ -176,7 +181,7 @@ export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
     interruptedPhase: cleanupPending ? 'cleanup' : run.status === 'running' ? (inference ? 'inference' : sessionCreated ? 'after-session-create' : 'execution') : null,
     inference,
     cause: run.fault ? 'recorded-fault' : 'unknown',
-    unloadEvidence, unloadObserved, reentryGapMs, navigationType,
+    unloadEvidence, unloadObserved, unloadKind, reentryGapMs, navigationType,
     lifecycleHistory: lifecycle,
     lifecycle: events };
 }
@@ -184,9 +189,12 @@ export function recoveryEvidence(run, context = {}, observedAt = Date.now()) {
 /** Human-readable unload evidence for an interrupted run; empty when there is nothing to add. */
 export function unloadLabel(recovery) {
   if (!recovery?.unloadEvidence || recovery.unloadEvidence === 'recorded-fault') return '';
-  if (recovery.unloadEvidence === 'unload-observed') return '페이지 이동·새로고침 이벤트 기록됨';
   const gap = recovery.reentryGapMs == null ? '' : ` ${(recovery.reentryGapMs / 1000).toFixed(1)}초 뒤 다시 열림`;
   const navigation = recovery.navigationType ? ` · 탐색 유형 ${recovery.navigationType}` : '';
+  if (recovery.unloadEvidence === 'unload-observed') {
+    return recovery.unloadKind === 'persisted-hide' ? `페이지 가려짐(pagehide persisted·hidden) 기록됨${gap}${navigation}`
+      : `페이지 이동·새로고침 이벤트 기록됨${gap}${navigation}`;
+  }
   return `언로드 이벤트 없이${gap}${navigation}`;
 }
 
@@ -226,8 +234,8 @@ export function diagnosticSummary(run, sessionFallback = null) {
     stopSource: run.summary?.stopSource ?? (last.stage === 'user-cancelled' ? 'user-stop' : null),
     completedRows: run.summary?.completedRows
       ?? (run.status === 'cancelled' && run.milestones?.['evaluation-rows'] ? (Array.isArray(run.rows) ? run.rows.length : 0) : null),
-    unloadEvidence: run.recovery?.unloadEvidence ?? null, reentryGapMs: run.recovery?.reentryGapMs ?? null,
-    navigationType: run.recovery?.navigationType ?? null,
+    unloadEvidence: run.recovery?.unloadEvidence ?? null, unloadKind: run.recovery?.unloadKind ?? null,
+    reentryGapMs: run.recovery?.reentryGapMs ?? null, navigationType: run.recovery?.navigationType ?? null,
     jsMemory: last.jsMemory ?? null,
     lastRecordAt: last.timestamp ?? null,
     stage: last.stage ?? null, initializerName: fault?.initializerName ?? progress.initializerName ?? session?.lastInitializer?.initializerName ?? null,

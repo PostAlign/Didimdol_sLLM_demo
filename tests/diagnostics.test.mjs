@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock, ortPlanEvidence, stopLabel } from '../web/sllm/diagnostics.js';
+import { RunDiagnostics, readRun, recoveryEvidence, diagnosticSummary, errorText, localTimestamp, deviceClock, ortPlanEvidence, stopLabel, unloadLabel } from '../web/sllm/diagnostics.js';
 
 test('reentry distinguishes completion, observation interruption and unfinished cleanup', () => {
   const session = { startedAt: 10, status: 'complete', summary: { modelSessionCreated: true }, last: { timestamp: 20 } };
@@ -233,6 +233,18 @@ test('recovery records unload evidence and the re-entry gap without upgrading th
   const hidden = recoveryEvidence(run, { lifecycle: [{ event: 'visibilitychange', visibility: 'hidden', timestamp: 121, runId: 'current' }] }, 130);
   assert.equal(hidden.unloadEvidence, 'unload-observed');
   assert.equal(hidden.unloadObserved, true);
+  assert.equal(hidden.unloadKind, 'unload');
+  assert.equal(unloadLabel(hidden), '페이지 이동·새로고침 이벤트 기록됨 0.0초 뒤 다시 열림');
+  // The September 14 evening streamed probe: pagehide with persisted: true and a hidden visibility 7 ms later.
+  const kept = recoveryEvidence(run, { lifecycle: [{ event: 'pagehide', visibility: 'visible', persisted: true, timestamp: 121, runId: 'current' },
+    { event: 'visibilitychange', visibility: 'hidden', timestamp: 121, runId: 'current' }], navigationType: 'reload' }, 14000);
+  assert.equal(kept.unloadEvidence, 'unload-observed');
+  assert.equal(kept.unloadKind, 'persisted-hide');
+  assert.equal(kept.cause, 'unknown');
+  assert.equal(unloadLabel(kept), '페이지 가려짐(pagehide persisted·hidden) 기록됨 13.9초 뒤 다시 열림 · 탐색 유형 reload');
+  assert.equal(diagnosticSummary({ ...run, recovery: kept }).unloadKind, 'persisted-hide');
+  assert.equal(silent.unloadKind, null);
+  assert.equal(unloadLabel(silent), '언로드 이벤트 없이 0.8초 뒤 다시 열림 · 탐색 유형 reload');
   const earlier = recoveryEvidence(run, { lifecycle: [{ event: 'pagehide', timestamp: 90 }] }, 130);
   assert.equal(earlier.unloadEvidence, 'no-unload-event', 'events before the run interval do not explain this run');
   assert.equal(recoveryEvidence({ ...run, status: 'complete' }, {}, 130).unloadEvidence, null);
